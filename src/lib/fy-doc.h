@@ -162,4 +162,87 @@ bool fy_document_is_colorized(struct fy_document *fyd);
 bool fy_document_is_accelerated(struct fy_document *fyd);
 bool fy_document_can_be_accelerated(struct fy_document *fyd);
 
+struct fy_walk_result {
+	struct list_head node;
+	struct fy_node *fyn;
+};
+FY_TYPE_FWD_DECL_LIST(walk_result);
+FY_TYPE_DECL_LIST(walk_result);
+
+enum fy_walk_component_type {
+	/* none is analyzed and the others are found */
+	fwct_none,
+	/* start */
+	fwct_start_root,
+	fwct_start_alias,
+	/* ypath */
+	fwct_root,		/* /^ or / at the beginning of the expr */
+	fwct_this,		/* /. */
+	fwct_parent,		/* /.. */
+	fwct_every_child,	// /* every immediate child
+	fwct_every_child_r,	// /** every recursive child
+	fwct_every_leaf,	// /**$ every leaf node
+	fwct_assert_collection,	/* match only collection (at the end only) */
+	fwct_simple_map_key,
+	fwct_simple_seq_index,
+	fwct_simple_sibling_map_key,
+};
+
+static inline bool
+fy_walk_component_type_is_initial(enum fy_walk_component_type type)
+{
+	return type == fwct_start_root ||
+	       type == fwct_start_alias;
+}
+
+static inline bool
+fy_walk_component_type_is_terminating(enum fy_walk_component_type type)
+{
+	return type == fwct_every_child_r ||
+	       type == fwct_every_leaf ||
+	       type == fwct_assert_collection;
+}
+
+struct fy_walk_component {
+	struct list_head node;
+	const char *comp;
+	size_t complen;
+	enum fy_walk_component_type type;
+	bool multi;
+	union {
+		int reljson_ptr_count;
+		int seq_index;
+		struct {
+			char *key_alloc;
+			const char *key;
+			size_t keylen;
+		} map_key;
+		struct {
+			const char *alias;
+			size_t aliaslen;
+		} alias;
+	};
+};
+FY_TYPE_FWD_DECL_LIST(walk_component);
+FY_TYPE_DECL_LIST(walk_component);
+
+struct fy_walk_ctx {
+	char *path;	/* work area */
+	size_t pathlen;
+	bool trailing_slash;
+	enum fy_node_walk_flags flags;
+	struct fy_walk_component_list components;
+};
+
+struct fy_walk_ctx *
+fy_walk_create(const char *path, size_t len,
+	       enum fy_node_walk_flags flags, struct fy_diag *diag);
+
+void fy_walk_destroy(struct fy_walk_ctx *wc);
+
+int fy_walk_perform(struct fy_walk_ctx *wc, struct fy_walk_result_list *results, struct fy_node *fyn);
+
+void fy_walk_result_free(struct fy_walk_result *fwr);
+void fy_walk_result_list_free(struct fy_walk_result_list *results);
+
 #endif

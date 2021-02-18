@@ -4187,6 +4187,711 @@ regular_path_lookup:
 	return fy_node_by_path_internal(fyn, path, len, flags);
 }
 
+/* NOTE that walk results do not take references and it is invalid to
+ * use _any_ call that modifies the document structure
+ */
+struct fy_walk_result *fy_walk_result_alloc(void)
+{
+	struct fy_walk_result *fwr = NULL;
+
+	fwr = malloc(sizeof(*fwr));
+	if (!fwr)
+		return NULL;
+	memset(fwr, 0, sizeof(*fwr));
+	return fwr;
+}
+
+void fy_walk_result_free(struct fy_walk_result *fwr)
+{
+	if (!fwr)
+		return;
+	free(fwr);
+}
+
+void fy_walk_result_list_free(struct fy_walk_result_list *results)
+{
+	struct fy_walk_result *fwr;
+
+	while ((fwr = fy_walk_result_list_pop(results)) != NULL)
+		fy_walk_result_free(fwr);
+}
+
+struct fy_walk_component *fy_walk_component_alloc(void)
+{
+	struct fy_walk_component *fwc = NULL;
+
+	fwc = malloc(sizeof(*fwc));
+	if (!fwc)
+		return NULL;
+	memset(fwc, 0, sizeof(*fwc));
+
+	return fwc;
+}
+
+void fy_walk_component_free(struct fy_walk_component *fwc)
+{
+	if (!fwc)
+		return;
+
+	switch (fwc->type) {
+	case fwct_simple_map_key:
+		if (fwc->map_key.key_alloc)
+			free(fwc->map_key.key_alloc);
+		break;
+	default:
+		break;
+	}
+
+	free(fwc);
+}
+
+void fy_walk_destroy(struct fy_walk_ctx *wc)
+{
+	struct fy_walk_component *fwc;
+
+	if (!wc)
+		return;
+
+	while ((fwc = fy_walk_component_list_pop(&wc->components)) != NULL)
+		fy_walk_component_free(fwc);
+
+	if (wc->path)
+		free(wc->path);
+
+	free(wc);
+}
+
+static bool is_walk_plain_key(const char *s, size_t len)
+{
+	const char *e = s + len, *t;
+
+	if (!len)
+		return false;
+
+	if (fy_utf8_strchr(",[]{}#&*!|<>'\"%@`?:-0123456789", *s))
+		return false;
+
+	t = s;
+	t++;
+	while (t < e && !fy_utf8_strchr(",[]{}#&*!|<>'\"%@`?:", *t))
+		t++;
+
+	return t >= e;
+}
+
+struct fy_walk_component *
+fy_walk_add_component(struct fy_walk_ctx *wc,
+		      const char *comp, size_t complen,
+		      enum fy_walk_component_type type,
+		      struct fy_diag *diag)
+{
+	struct fy_walk_component *fwc;
+	const char *s, *e, *t;
+	char *ss, *ee;
+	size_t len, rlen, allocsz;
+	bool multi = false;
+	bool singleq = false;
+	uint8_t code[4], *tt;
+	char *end_idx;
+	int ret;
+
+	if (!wc || !comp)
+		return NULL;
+
+	/* the pointer must lie in the walk context buffer */
+	assert(comp >= wc->path && comp + complen <= wc->path + wc->pathlen);
+
+	fwc = fy_walk_component_alloc();
+	if (!fwc) {
+		fy_notice(diag, "%s: fy_walk_component_alloc() failed\n", __func__);
+		goto err_out;
+	}
+	fwc->comp = comp;
+	fwc->complen = complen;
+
+	if (type != fwct_none)
+		goto skip_find_analysis;
+
+	s = comp;
+	e = comp + complen;
+	len = e - s;
+
+	if (!len) {
+		fy_notice(diag, "%s: can't analyze with len=0\n", __func__);
+		goto err_out;
+	}
+
+	/* long form .(x) */
+	if (len >= 4 && s[0] == '.' && s[1] == '(' && s[len - 1] == ')') {
+		/* XXX todo */
+		fy_notice(diag, "%s: long form not supported for now...\n", __func__);
+		goto err_out;
+	}
+
+	/* ./ this */
+	if (len == 1 && s[0] == '.') {
+		type = fwct_this;
+		goto skip_find_analysis;
+	}
+
+	/* ../ parent */
+	if (len == 2 && s[0] == '.' && s[1] == '.') {
+		type = fwct_parent;
+		goto skip_find_analysis;
+	}
+
+	/* ^/ root */
+	if (len == 1 && s[0] == '^') {
+		type = fwct_root;
+		goto skip_find_analysis;
+	}
+
+	// /* every immediate child node
+	if (len == 1 && s[0] == '*') {
+		type = fwct_every_child;
+		multi = true;
+		goto skip_find_analysis;
+	}
+
+	// /** every child node recursive
+	if (len == 2 && s[0] == '*' && s[1] == '*') {
+		type = fwct_every_child_r;
+		multi = true;
+		goto skip_find_analysis;
+	}
+
+	// /**$ every leaf node
+	if (len == 3 && s[0] == '*' && s[1] == '*' && s[2] == '$') {
+		type = fwct_every_leaf;
+		multi = true;
+		goto skip_find_analysis;
+	}
+
+	/* single or double quotes */
+	if (len >= 2 && ((s[0] == '\'' && s[len-1] == '\'') ||
+			 (s[0] == '"'  && s[len-1] == '"')) ) {
+
+		singleq = s[0] == '\'';
+
+		s++;
+		e--;
+		type = fwct_simple_map_key;
+
+		/* if there's no escape no need to allocate */
+		if (!memchr(s, singleq ? '\'' : '\\', e-s)) {
+			fwc->map_key.key_alloc = NULL;
+			fwc->map_key.key = s;
+			fwc->map_key.keylen = e - s;
+			fy_notice(diag, "%s: single chunk simple key %.*s\n", __func__, (int)fwc->map_key.keylen, fwc->map_key.key);
+			goto skip_find_analysis;
+		}
+
+		/* there are escapes, allocate worse case */
+		allocsz = e - s;
+		if (!singleq)
+			allocsz *= 2;	/* for double quotes escapes might grow the key */
+		fwc->map_key.key_alloc = malloc(allocsz + 1);
+		if (!fwc->map_key.key_alloc) {
+			fy_notice(diag, "%s: quote alloc() failed\n", __func__);
+			goto err_out;
+		}
+		ss = fwc->map_key.key_alloc;
+		ee = ss + (e - s);
+		fwc->map_key.key = ss;
+
+		while (s < e) {
+			/* find next single quote */
+			t = memchr(s, singleq ? '\'' : '\\', e - s);
+			rlen = (t ? t : e) - s;
+
+			assert(ss + rlen <= ee);
+			memcpy(ss, s, rlen);
+
+			fy_notice(diag, "%s: chunk simple key %.*s\n", __func__, (int)rlen, ss);
+
+			ss += rlen;
+			s += rlen;
+
+
+			/* end of string */
+			if (!t)
+				break;
+
+			ret = fy_utf8_parse_escape(&t, e - t, singleq ? fyue_singlequote : fyue_doublequote);
+			if (ret < 0) {
+				fy_notice(diag, "%s: %s-quoted component bad escape\n", __func__,
+						singleq ? "single" : "double");
+				goto err_out;
+			}
+			s = t;
+
+			tt = fy_utf8_put(code, sizeof(code), ret);
+			if (!tt) {
+				fy_notice(diag, "%s: %s-quoted component escape can't put\n", __func__,
+						singleq ? "single" : "double");
+				goto err_out;
+			}
+
+			/* copy it out */
+			rlen = tt - code;
+
+			assert(ss + rlen <= ee);
+			memcpy(ss, code, rlen);
+			ss += rlen;
+		}
+		fwc->map_key.keylen = ss - fwc->map_key.key;
+		goto skip_find_analysis;
+	}
+
+	/* number */
+	if ((len >= 1 && isdigit(s[0])) || (len >= 2 && s[0] == '-' && isdigit(s[1]))) {
+		ret = (int)strtol(s, &end_idx, 10);
+		if ((ret == 0 && s == end_idx) || end_idx != e) {
+			fy_notice(diag, "%s: bad sequence index\n", __func__);
+			goto err_out;
+		}
+		type = fwct_simple_seq_index;
+		fwc->seq_index = ret;
+		goto skip_find_analysis;
+	}
+
+	/* plain... */
+	if (is_walk_plain_key(s, e - s)) {
+		type = fwct_simple_map_key;
+
+		fwc->map_key.key_alloc = NULL;
+		fwc->map_key.key = s;
+		fwc->map_key.keylen = e - s;
+		fy_notice(diag, "%s: plain simple key %.*s\n", __func__, (int)fwc->map_key.keylen, fwc->map_key.key);
+		goto skip_find_analysis;
+	}
+
+	/* sibling plain key */
+	if ((e - s) >= 2 && *s ==  ':' && is_walk_plain_key(s + 1, e - s - 1)) {
+		type = fwct_simple_sibling_map_key;
+
+		fwc->map_key.key_alloc = NULL;
+		fwc->map_key.key = s + 1;
+		fwc->map_key.keylen = e - s - 1;
+		fy_notice(diag, "%s: plain sibling simple key %.*s\n", __func__, (int)fwc->map_key.keylen, fwc->map_key.key);
+		goto skip_find_analysis;
+	}
+
+skip_find_analysis:
+	fwc->type = type;
+	fwc->multi = multi;
+
+	fy_walk_component_list_add_tail(&wc->components, fwc);
+	return fwc;
+
+err_out:
+	return NULL;
+}
+
+struct fy_walk_ctx *
+fy_walk_create(const char *path, size_t len,
+	       enum fy_node_walk_flags flags,
+	       struct fy_diag *diag)
+{
+	struct fy_walk_ctx *wc = NULL;
+	struct fy_walk_component *fwc;
+	const char *s, *e, *ss, *comp;
+	size_t complen;
+	int c;
+
+	if (!path || !len) {
+		fy_notice(diag, "%s: path empty\n", __func__);
+		goto err_out;
+	}
+
+	wc = malloc(sizeof(*wc));
+	if (!wc) {
+		fy_notice(diag, "%s: unable to allocate wc\n", __func__);
+		goto err_out;
+	}
+
+	if (len == (size_t)-1)
+		len = strlen(path);
+
+	/* strip leading and trailing spaces */
+	s = path;
+	e = path + len;
+	while (s < e && isspace(*s))
+		s++;
+	while (s < e && isspace(e[-1]))
+		e--;
+	path = s;
+	len = e - s;
+
+	/* nothing but spaces huh? */
+	if (!len) {
+		fy_notice(diag, "%s: path empty (2)\n", __func__);
+		goto err_out;
+	}
+
+	memset(wc, 0, sizeof(*wc));
+	fy_walk_component_list_init(&wc->components);
+	wc->flags = flags;
+
+	wc->path = malloc(len + 1);
+	if (!wc->path) {
+		fy_notice(diag, "%s: unable to allocate copy of path\n", __func__);
+		goto err_out;
+	}
+	memcpy(wc->path, path, len);
+	wc->path[len] = '\0';
+	wc->pathlen = len;
+
+	s = wc->path;
+	e = s + len;
+
+	/* a trailing slash works just like unix and symbolic links
+	 * if it does not exist no symbolic link lookups are performed
+	 * at the end of the operation.
+	 * if it exists they are followed upon resolution
+	 */
+	wc->trailing_slash = len > 0 && s[len - 1] == '/';
+
+	/* first path component may be an alias */
+	if (!(wc->flags & FYNWF_FOLLOW) || s >= e || *s != '*')
+		goto regular_path_lookup;
+
+	/* if it's '*' or '**' or '**$' skip */
+	if ((e - s) == 1 ||
+	    ((e - s) == 2 && s[1] == '*') ||
+	    ((e - s) == 3 && s[1] == '*' && s[2] == '$'))
+		goto regular_path_lookup;
+
+	c = -1;
+	for (ss = s; ss < e; ss++) {
+		c = *ss;
+		/* it ends on anything non alias */
+		if (c == '[' || c == ']' ||
+			c == '{' || c == '}' ||
+			c == ',' || isspace(c) ||
+			c == '/')
+			break;
+	}
+
+	/* bad alias form for path */
+	if (c == '[' || c == ']' || c == '{' || c == '}' || c == ',') {
+		fy_notice(diag, "%s: bad alias form for path\n", __func__);
+		goto err_out;
+	}
+
+	/* it must not begin with '/' */
+	if (s == ss) {
+		fy_notice(diag, "%s: anchor but empty\n", __func__);
+		goto err_out;
+	}
+
+	fwc = fy_walk_add_component(wc, s, ss - s, fwct_start_alias, diag);
+	if (!fwc) {
+		fy_notice(diag, "%s: fy_walk_add_component() failed for start anchor\n", __func__);
+		goto err_out;
+	}
+	fwc->alias.alias = s + 1;
+	fwc->alias.aliaslen = ss - s - 1;
+
+	fy_notice(diag, "%s: added start alias component %.*s\n", __func__, (int)(ss - s), s);
+
+	/* skip over the anchor and continue */
+	s = ss;
+	len = e - s;
+
+	/* if there's nothing left we're done */
+	if (!len)
+		goto done;
+
+regular_path_lookup:
+
+	assert(e > s && len > 0);
+
+	while (s < e) {
+
+		/* regular path follows (and no previous anchor) */
+		if (*s == '/' && fy_walk_component_list_empty(&wc->components)) {
+			/* if the component list is empty, start from root */
+			fwc = fy_walk_add_component(wc, s, 0, fwct_start_root, diag);
+			if (!fwc) {
+				fy_notice(diag, "%s: fy_walk_add_component() failed for start root\n", __func__);
+				goto err_out;
+			}
+			fy_notice(diag, "%s: added start_root component\n", __func__);
+			if (s + 1 >= e)
+				goto done;
+		}
+
+		comp = NULL;
+		complen = 0;
+
+		/* consecutive // are ignored */
+		while (s < e && *s == '/')
+			s++;
+
+		ss = s;
+
+		/* scan ahead for the end of the path component
+		 * note that we don't do UTF8 here, because all the
+		 * escapes are regular ascii characters, i.e.
+		 * '/', '*', '&', '.', '{', '}', '[', ']' and '\\'
+		 */
+
+		while (s < e) {
+			c = *s;
+			/* end of path component? */
+			if (c == '/')
+				break;
+			s++;
+
+			if (c == '\\') {
+
+				/* it must be a valid escape */
+				if (s >= e || !strchr("/*&.{}[]\\", *s)) {
+					fy_notice(diag, "%s: bad escape %c\n", __func__, *s);
+					goto err_out;
+				}
+				s++;
+
+			} else if (c == '"') {
+
+				while (s < e && *s != '"') {
+					c = *s++;
+					if (c == '\\' && (s < e && *s == '"'))
+						s++;
+				}
+				/* not a normal double quote end */
+				if (s >= e || *s != '"') {
+					fy_notice(diag, "%s: bad double quote end: %.*s\n", __func__,
+							(int)(s - ss), ss);
+					goto err_out;
+				}
+				s++;
+
+			} else if (c == '\'') {
+
+				while (s < e && *s != '\'') {
+					c = *s++;
+					if (c == '\'' && (s < e && *s == '\''))
+						s++;
+				}
+				/* not a normal single quote end */
+				if (s >= e || *s != '\'') {
+					fy_notice(diag, "%s: bad single quote end: %.*s\n", __func__,
+							(int)(s - ss), ss);
+					goto err_out;
+				}
+				s++;
+			}
+		}
+
+		comp = ss;
+		complen = s - ss;
+		len = e - s;
+
+		/* terminating / */
+		if (!complen && s < e) {
+			fy_notice(diag, "%s: empty component but not at end\n", __func__);
+			goto err_out;
+		}
+
+		/* note fwct_none is further analyzed */
+		fwc = fy_walk_add_component(wc, comp, complen, complen ? fwct_none : fwct_assert_collection, diag);
+		if (!fwc) {
+			fy_notice(diag, "%s: fy_walk_add_component() failed for component %.*s\n", __func__,
+					(int)complen, comp);
+			goto err_out;
+		}
+
+		/* terminating component with more remaining is illegal */
+		if (fy_walk_component_type_is_terminating(fwc->type) && s < e) {
+			fy_notice(diag, "%s: terminating component with more remaining is illegal\n", __func__);
+			goto err_out;
+		}
+
+		fy_notice(diag, "%s: added component %.*s\n", __func__, (int)complen, comp);
+
+	}
+
+done:
+
+	if (fy_walk_component_list_empty(&wc->components)) {
+		fy_notice(diag, "%s: no components discovered error\n", __func__);
+		goto err_out;
+	}
+
+	fy_notice(diag, "%s: OK\n", __func__);
+
+	return wc;
+
+err_out:
+	fy_walk_destroy(wc);	/* NULL is fine */
+	return NULL;
+}
+
+int fy_walk_result_add(struct fy_walk_result_list *results, struct fy_node *fyn)
+{
+	struct fy_walk_result *fwr;
+
+	fwr = fy_walk_result_alloc();
+	if (!fwr) {
+		fprintf(stderr, "%s:%d error\n", __FILE__, __LINE__);
+		return -1;
+	}
+	fwr->fyn = fyn;
+	fy_walk_result_list_add_tail(results, fwr);
+	return 0;
+}
+
+int fy_walk_result_add_recursive(struct fy_walk_result_list *results, struct fy_node *fyn, bool leaf_only)
+{
+	struct fy_node *fyni;
+	struct fy_node_pair *fynp;
+	int ret;
+
+	if (!fyn)
+		return 0;
+
+	if (fy_node_is_scalar(fyn))
+		return fy_walk_result_add(results, fyn);
+
+	if (!leaf_only) {
+		ret = fy_walk_result_add(results, fyn);
+		if (ret)
+			return ret;
+	}
+
+	if (fy_node_is_sequence(fyn)) {
+		for (fyni = fy_node_list_head(&fyn->sequence); fyni;
+				fyni = fy_node_next(&fyn->sequence, fyni)) {
+
+			ret = fy_walk_result_add_recursive(results, fyni, leaf_only);
+			if (ret)
+				return ret;
+		}
+	} else {
+		for (fynp = fy_node_pair_list_head(&fyn->mapping); fynp;
+				fynp = fy_node_pair_next(&fyn->mapping, fynp)) {
+
+			ret = fy_walk_result_add_recursive(results, fynp->value, leaf_only);
+			if (ret)
+				return ret;
+		}
+	}
+	return 0;
+}
+
+static int
+fy_walk_perform_internal(struct fy_walk_ctx *wc,
+			 struct fy_walk_result_list *results,
+			 struct fy_node *fyn,
+			 struct fy_walk_component *fwc)
+{
+	struct fy_anchor *fya;
+	struct fy_node *fynn = NULL, *fyni;
+	struct fy_node_pair *fynp;
+	int ret, rret;
+
+	/* no node, do not continue */
+	if (!fyn)
+		return 0;
+
+	/* no next component? add node */
+	if (!fwc)
+		return fy_walk_result_add(results, fyn);
+
+	switch (fwc->type) {
+	case fwct_start_root:
+	case fwct_root:
+		fynn = fyn->fyd->root;
+		break;
+	case fwct_start_alias:
+		fya = fy_document_lookup_anchor(fyn->fyd, fwc->alias.alias, fwc->alias.aliaslen);
+		fynn = fya ? fya->fyn : NULL;
+		break;
+	case fwct_this:
+		fynn = fyn;
+		break;
+	case fwct_parent:
+		fynn = fy_node_get_parent(fyn);
+		break;
+	case fwct_simple_map_key:
+		fynn = fy_node_mapping_lookup_value_by_simple_key(fyn, fwc->map_key.key, fwc->map_key.keylen);
+		break;
+	case fwct_simple_seq_index:
+		fynn = fy_node_sequence_get_by_index(fyn, fwc->seq_index);
+		break;
+	case fwct_simple_sibling_map_key:
+		fynn = fy_node_get_parent(fyn);
+		if (fynn)
+			fynn = fy_node_mapping_lookup_value_by_simple_key(fynn, fwc->map_key.key, fwc->map_key.keylen);
+		break;
+	case fwct_every_child:
+
+		if (fy_node_is_scalar(fyn)) {
+			fynn = fyn;
+			break;
+		}
+
+		fwc = fy_walk_component_next(&wc->components, fwc);
+
+		rret = 0;
+		if (fy_node_is_sequence(fyn)) {
+			for (fyni = fy_node_list_head(&fyn->sequence); fyni;
+					fyni = fy_node_next(&fyn->sequence, fyni)) {
+
+				ret = fy_walk_perform_internal(wc, results, fyni, fwc);
+				if (!rret && ret)
+					rret = ret;
+				if (ret)
+					break;
+
+			}
+		} else {
+			for (fynp = fy_node_pair_list_head(&fyn->mapping); fynp;
+					fynp = fy_node_pair_next(&fyn->mapping, fynp)) {
+
+				ret = fy_walk_perform_internal(wc, results, fynp->value, fwc);
+				if (!rret && ret)
+					rret = ret;
+				if (ret)
+					break;
+			}
+		}
+		return rret;
+
+		/* terminating */
+	case fwct_every_child_r:
+	case fwct_every_leaf:
+		return fy_walk_result_add_recursive(results, fyn, fwc->type == fwct_every_leaf);
+
+	case fwct_assert_collection:
+		/* no match for scalar */
+		fynn = fy_node_is_scalar(fyn) ? NULL : fyn;
+		break;
+
+	default:
+		break;
+	}
+
+	fwc = fy_walk_component_next(&wc->components, fwc);
+	return fy_walk_perform_internal(wc, results, fynn, fwc);
+}
+
+int fy_walk_perform(struct fy_walk_ctx *wc, struct fy_walk_result_list *results, struct fy_node *fyn)
+{
+	struct fy_walk_component *fwc;
+
+	if (!wc || !results || !fyn)
+		return -1;
+
+	fwc = fy_walk_component_list_head(&wc->components);
+	if (!fwc)
+		return -1;
+
+	return fy_walk_perform_internal(wc, results, fyn, fwc);
+}
+
 static char *
 fy_node_get_reference_internal(struct fy_node *fyn_base, struct fy_node *fyn, bool near)
 {
@@ -6253,7 +6958,7 @@ int fy_node_hash_uint(struct fy_node *fyn, unsigned int *hashp)
 
 	XXH32_reset(&state, 2654435761U);
 
-	rc = fy_node_hash_internal(fyn, update_xx32, &state); 
+	rc = fy_node_hash_internal(fyn, update_xx32, &state);
 	if (rc)
 		return rc;
 

@@ -58,6 +58,8 @@ static struct option lopts[] = {
 	{"diag",		required_argument,	0,	'D' },
 	{"module",		required_argument,	0,	'M' },
 	{"disable-mmap",	no_argument,		0,	OPT_DISABLE_MMAP },
+	{"walk-path",		required_argument,	0,	'W' },
+	{"walk-start",		required_argument,	0,	'S' },
 	{"quiet",		no_argument,		0,	'q' },
 	{"help",		no_argument,		0,	'h' },
 	{0,			0,              	0,	 0  },
@@ -69,7 +71,7 @@ static struct option lopts[] = {
 #define LIBYAML_MODES	""
 #endif
 
-#define MODES	"parse|scan|copy|testsuite|dump|build" LIBYAML_MODES
+#define MODES	"parse|scan|copy|testsuite|dump|build|walk" LIBYAML_MODES
 
 static void display_usage(FILE *fp, char *progname)
 {
@@ -106,6 +108,7 @@ static void display_usage(FILE *fp, char *progname)
 						" (source, position, type, module, all, none)\n");
 	fprintf(fp, "\t--module, -M <mod,[mod]> : Set debug message module enable"
 						" (unknown, atom, scan, parse, doc, build, internal, system, all, none)\n");
+	fprintf(fp, "\t--walk-path, -W <path>   : Walk path for work mode\n");
 	fprintf(fp, "\t--quiet, -q              : Quiet operation, do not "
 						"output messages (default %s)\n",
 						QUIET_DEFAULT ? "true" : "false");
@@ -1266,7 +1269,7 @@ static void do_accel_kv(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 	fy_kv_store_cleanup(&kvs);
 }
 
-static int do_accel_test(const struct fy_parse_cfg *cfg, int argc, char *argv[])
+int do_accel_test(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 {
 	do_accel_kv(cfg, argc, argv);
 
@@ -1282,6 +1285,72 @@ static void test_diag_output(struct fy_diag *diag, void *user, const char *buf, 
 	fprintf(fp, "%d: %.*s",  ++counter, (int)len, buf);
 }
 #endif
+
+static const char *walk_component_type_txt[] = {
+	[fwct_none]			= "none",
+	/* */
+	[fwct_start_root]		= "start-root",
+	[fwct_start_alias]		= "start-alias",
+	/* */
+	[fwct_root]			= "root",
+	[fwct_this]			= "this",
+	[fwct_parent]			= "parent",
+	[fwct_every_child]		= "every-child",
+	[fwct_every_child_r]		= "every-child-recursive",
+	[fwct_every_leaf]		= "every-leaf",
+	[fwct_assert_collection]	= "assert-collection",
+	[fwct_simple_map_key]		= "simple-map-key",
+	[fwct_simple_seq_index]		= "simple-seq-index",
+	[fwct_simple_sibling_map_key]	= "simple-sibling-map-key",
+};
+
+static void
+do_walk_test(const struct fy_parse_cfg *cfg, int argc, char *argv[])
+{
+	struct fy_diag_cfg dcfg;
+	struct fy_walk_ctx *wc = NULL;
+	struct fy_walk_component *fwc;
+	struct fy_diag *diag;
+	const char *path;
+
+	fy_diag_cfg_default(&dcfg);
+	diag = fy_diag_create(&dcfg);
+	assert(diag);
+
+	if (argc < 1)
+		path = "/test";
+	else
+		path = argv[0];
+
+	printf("creating walk for \"%s\"\n", path);
+
+	wc = fy_walk_create(path, (size_t)-1, FYNWF_FOLLOW | FYNWF_PTR_YAML, diag);
+	assert(wc);
+
+	printf("walk created OK\n");
+
+	printf("components:\n");
+	for (fwc = fy_walk_component_list_head(&wc->components); fwc; fwc = fy_walk_component_next(&wc->components, fwc)) {
+		printf("  %-32s %.*s\n", walk_component_type_txt[fwc->type], (int)fwc->complen, fwc->comp);
+		switch (fwc->type) {
+		case fwct_simple_map_key:
+			printf("\tsimple-key: %.*s\n", (int)fwc->map_key.keylen, fwc->map_key.key);
+			break;
+		case fwct_simple_seq_index:
+			printf("\tsimple-seq-index: %d\n", (int)fwc->seq_index);
+			break;
+		case fwct_start_alias:
+			printf("\tstart-alias: %.*s\n", (int)fwc->alias.aliaslen, fwc->alias.alias);
+			break;
+		default:
+			break;
+		}
+	}
+
+	fy_walk_destroy(wc);
+
+	fy_diag_destroy(diag);
+}
 
 int do_build(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 {
@@ -1899,7 +1968,7 @@ int do_build(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 	cfg_tmp.flags |= FYPCF_COLLECT_DIAG;
 
 	/* this is an error */
-	fyd = fy_document_build_from_string(&cfg_tmp, "{ a: 5 ]");
+	fyd = fy_document_build_from_string(&cfg_tmp, "{ a: 5 ] }");
 	assert(fyd);
 	assert(!fyd->root);
 
@@ -2473,10 +2542,102 @@ int do_build(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 	}
 #endif
 
+#if 0
 	do_accel_test(cfg, argc, argv);
+#endif
+
+	do_walk_test(cfg, argc, argv);
 
 	return 0;
 }
+
+int do_walk(struct fy_parser *fyp, const char *walkpath, const char *walkstart, int indent, int width, bool resolve, bool sort)
+{
+	struct fy_walk_ctx *wc;
+	struct fy_walk_component *fwc;
+	struct fy_walk_result_list results;
+	struct fy_walk_result *fwr;
+	struct fy_document *fyd;
+	struct fy_node *fyn;
+	unsigned int flags;
+	int rc, count;
+	char *path;
+
+	flags = 0;
+	if (sort)
+		flags |= FYECF_SORT_KEYS;
+	flags |= FYECF_INDENT(indent) | FYECF_WIDTH(width);
+
+	fy_notice(fyp->diag, "creating walk for \"%s\"\n", walkpath);
+
+	wc = fy_walk_create(walkpath, (size_t)-1, FYNWF_FOLLOW | FYNWF_PTR_YAML, fyp->diag);
+	if (!wc) {
+		fy_error(fyp->diag, "failed to create walk for \"%s\"\n", walkpath);
+		return -1;
+	}
+
+	fy_notice(fyp->diag, "components:\n");
+	for (fwc = fy_walk_component_list_head(&wc->components); fwc; fwc = fy_walk_component_next(&wc->components, fwc)) {
+		fy_notice(fyp->diag, "  %-32s %.*s\n", walk_component_type_txt[fwc->type], (int)fwc->complen, fwc->comp);
+		switch (fwc->type) {
+		case fwct_simple_map_key:
+		case fwct_simple_sibling_map_key:
+			fy_notice(fyp->diag, "   simple-key: %.*s\n", (int)fwc->map_key.keylen, fwc->map_key.key);
+			break;
+		case fwct_simple_seq_index:
+			fy_notice(fyp->diag, "   simple-seq-index: %d\n", (int)fwc->seq_index);
+			break;
+		case fwct_start_alias:
+			fy_notice(fyp->diag, "   start-alias: %.*s\n", (int)fwc->alias.aliaslen, fwc->alias.alias);
+			break;
+		default:
+			break;
+		}
+	}
+
+	count = 0;
+	while ((fyd = fy_parse_load_document(fyp)) != NULL) {
+
+		if (resolve) {
+			rc = fy_document_resolve(fyd);
+			if (rc)
+				return -1;
+		}
+
+		fyn = fy_node_by_path(fy_document_root(fyd), walkstart, FY_NT, FYNWF_DONT_FOLLOW);
+		if (!fyn) {
+			printf("could not find walkstart node %s\n", walkstart);
+			continue;
+		}
+
+		fy_walk_result_list_init(&results);
+
+		fy_walk_perform(wc, &results, fyn);
+
+		fy_emit_document_to_file(fyd, flags, NULL);
+
+		printf("\n");
+		while ((fwr = fy_walk_result_list_pop(&results)) != NULL) {
+
+			path = fy_node_get_path(fwr->fyn);
+			assert(path);
+
+			printf("> %s\n", path);
+			free(path);
+
+			fy_walk_result_free(fwr);
+		}
+
+		fy_parse_document_destroy(fyp, fyd);
+
+		count++;
+	}
+
+	fy_walk_destroy(wc);
+
+	return count > 0 ? 0 : -1;
+}
+
 
 static int modify_module_flags(const char *what, unsigned int *flagsp)
 {
@@ -2494,6 +2655,7 @@ static int modify_module_flags(const char *what, unsigned int *flagsp)
 		{ .name = "parse",	.set = FYPCF_DEBUG_PARSE },
 		{ .name = "doc",	.set = FYPCF_DEBUG_DOC },
 		{ .name = "build",	.set = FYPCF_DEBUG_BUILD },
+		{ .name = "walk",	.set = FYPCF_DEBUG_BUILD },
 		{ .name = "internal",	.set = FYPCF_DEBUG_INTERNAL },
 		{ .name = "system",	.set = FYPCF_DEBUG_SYSTEM },
 	};
@@ -2626,10 +2788,12 @@ int main(int argc, char *argv[])
 	bool sort = SORT_DEFAULT;
 	size_t chunk = CHUNK_DEFAULT;
 	const char *color = COLOR_DEFAULT;
+	const char *walkpath = "/";
+	const char *walkstart = "/";
 
 	fy_valgrind_check(&argc, &argv);
 
-	while ((opt = getopt_long_only(argc, argv, "I:m:i:w:d:rsc:C:D:M:qh", lopts, &lidx)) != -1) {
+	while ((opt = getopt_long_only(argc, argv, "I:m:i:w:d:rsc:C:D:M:W:S:qh", lopts, &lidx)) != -1) {
 		switch (opt) {
 		case 'I':
 			tmp = alloca(strlen(cfg.search_path) + 1 + strlen(optarg) + 1);
@@ -2712,6 +2876,12 @@ int main(int argc, char *argv[])
 				display_usage(stderr, argv[0]);
 			}
 			break;
+		case 'W':
+			walkpath = optarg;
+			break;
+		case 'S':
+			walkstart = optarg;
+			break;
 		case OPT_DISABLE_MMAP:
 			cfg.flags |= FYPCF_DISABLE_MMAP_OPT;
 			break;
@@ -2733,7 +2903,8 @@ int main(int argc, char *argv[])
 	    strcmp(mode, "copy") &&
 	    strcmp(mode, "testsuite") &&
 	    strcmp(mode, "dump") &&
-	    strcmp(mode, "build")
+	    strcmp(mode, "build") &&
+	    strcmp(mode, "walk")
 #if defined(HAVE_LIBYAML) && HAVE_LIBYAML
 	    && strcmp(mode, "libyaml-scan")
 	    && strcmp(mode, "libyaml-parse")
@@ -2897,6 +3068,12 @@ int main(int argc, char *argv[])
 		rc = do_dump(fyp, indent, width, resolve, sort);
 		if (rc < 0) {
 			/* fprintf(stderr, "do_dump() error %d\n", rc); */
+			goto cleanup;
+		}
+	} else if (!strcmp(mode, "walk")) {
+		rc = do_walk(fyp, walkpath, walkstart, indent, width, resolve, sort);
+		if (rc < 0) {
+			/* fprintf(stderr, "do_walk() error %d\n", rc); */
 			goto cleanup;
 		}
 	}
