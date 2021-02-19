@@ -186,6 +186,9 @@ enum fy_walk_component_type {
 	fwct_simple_map_key,
 	fwct_simple_seq_index,
 	fwct_simple_sibling_map_key,
+	fwct_map_key,		/* complex map key (quoted, flow seq or map) */
+	fwct_sibling_map_key,
+	fwct_sibling_seq_index,
 };
 
 static inline bool
@@ -216,6 +219,7 @@ struct fy_walk_component {
 			char *key_alloc;
 			const char *key;
 			size_t keylen;
+			struct fy_document *fyd;	/* for complex key */
 		} map_key;
 		struct {
 			const char *alias;

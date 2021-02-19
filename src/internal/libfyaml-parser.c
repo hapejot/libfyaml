@@ -1302,6 +1302,10 @@ static const char *walk_component_type_txt[] = {
 	[fwct_simple_map_key]		= "simple-map-key",
 	[fwct_simple_seq_index]		= "simple-seq-index",
 	[fwct_simple_sibling_map_key]	= "simple-sibling-map-key",
+
+	[fwct_map_key]			= "map-key",
+	[fwct_sibling_map_key]		= "sibling-map-key",
+	[fwct_sibling_seq_index]	= "sibling-seq-index",
 };
 
 static void
