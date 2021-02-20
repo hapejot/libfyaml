@@ -183,13 +183,22 @@ enum fy_walk_component_type {
 	fwct_every_child_r,	// /** every recursive child
 	fwct_every_leaf,	// /**$ every leaf node
 	fwct_assert_collection,	/* match only collection (at the end only) */
+	fwct_assert_scalar,	/* match only scalars (leaves) */
+	fwct_assert_sequence,	/* match only sequences */
+	fwct_assert_mapping,	/* match only sequences */
 	fwct_simple_map_key,
-	fwct_simple_seq_index,
-	fwct_simple_sibling_map_key,
+	fwct_seq_index,
 	fwct_map_key,		/* complex map key (quoted, flow seq or map) */
-	fwct_sibling_map_key,
-	fwct_sibling_seq_index,
+	fwct_seq_slice,
+
+	fwct_or,
+	fwct_and,
 };
+
+static inline bool fy_walk_component_type_is_valid(enum fy_walk_component_type type)
+{
+	return type >= fwct_start_root && type <= fwct_and;
+}
 
 static inline bool
 fy_walk_component_type_is_initial(enum fy_walk_component_type type)
@@ -203,31 +212,50 @@ fy_walk_component_type_is_terminating(enum fy_walk_component_type type)
 {
 	return type == fwct_every_child_r ||
 	       type == fwct_every_leaf ||
-	       type == fwct_assert_collection;
+	       type == fwct_assert_collection ||
+	       type == fwct_assert_scalar ||
+	       type == fwct_assert_sequence ||
+	       type == fwct_assert_mapping;
 }
 
+static inline bool
+fy_walk_component_type_is_multi(enum fy_walk_component_type type)
+{
+	return type == fwct_every_child ||
+	       type == fwct_every_child_r ||
+	       type == fwct_every_leaf ||
+	       type == fwct_seq_slice ||
+	       type == fwct_or ||
+	       type == fwct_and;
+}
+
+FY_TYPE_FWD_DECL_LIST(walk_component);
 struct fy_walk_component {
 	struct list_head node;
+	struct fy_walk_ctx *wc;
+	struct fy_walk_component *parent;
+	struct fy_walk_component_list children;
 	const char *comp;
 	size_t complen;
 	enum fy_walk_component_type type;
 	bool multi;
 	union {
-		int reljson_ptr_count;
-		int seq_index;
 		struct {
-			char *key_alloc;
-			const char *key;
-			size_t keylen;
+			int index;
+		} seq_index;
+		struct {
 			struct fy_document *fyd;	/* for complex key */
 		} map_key;
 		struct {
 			const char *alias;
 			size_t aliaslen;
 		} alias;
+		struct {
+			int start_index;
+			int end_index;
+		} seq_slice;
 	};
 };
-FY_TYPE_FWD_DECL_LIST(walk_component);
 FY_TYPE_DECL_LIST(walk_component);
 
 struct fy_walk_ctx {

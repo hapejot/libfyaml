@@ -1286,34 +1286,13 @@ static void test_diag_output(struct fy_diag *diag, void *user, const char *buf, 
 }
 #endif
 
-static const char *walk_component_type_txt[] = {
-	[fwct_none]			= "none",
-	/* */
-	[fwct_start_root]		= "start-root",
-	[fwct_start_alias]		= "start-alias",
-	/* */
-	[fwct_root]			= "root",
-	[fwct_this]			= "this",
-	[fwct_parent]			= "parent",
-	[fwct_every_child]		= "every-child",
-	[fwct_every_child_r]		= "every-child-recursive",
-	[fwct_every_leaf]		= "every-leaf",
-	[fwct_assert_collection]	= "assert-collection",
-	[fwct_simple_map_key]		= "simple-map-key",
-	[fwct_simple_seq_index]		= "simple-seq-index",
-	[fwct_simple_sibling_map_key]	= "simple-sibling-map-key",
-
-	[fwct_map_key]			= "map-key",
-	[fwct_sibling_map_key]		= "sibling-map-key",
-	[fwct_sibling_seq_index]	= "sibling-seq-index",
-};
+extern const char *walk_component_type_txt[];
 
 static void
 do_walk_test(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 {
 	struct fy_diag_cfg dcfg;
 	struct fy_walk_ctx *wc = NULL;
-	struct fy_walk_component *fwc;
 	struct fy_diag *diag;
 	const char *path;
 
@@ -1332,24 +1311,6 @@ do_walk_test(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 	assert(wc);
 
 	printf("walk created OK\n");
-
-	printf("components:\n");
-	for (fwc = fy_walk_component_list_head(&wc->components); fwc; fwc = fy_walk_component_next(&wc->components, fwc)) {
-		printf("  %-32s %.*s\n", walk_component_type_txt[fwc->type], (int)fwc->complen, fwc->comp);
-		switch (fwc->type) {
-		case fwct_simple_map_key:
-			printf("\tsimple-key: %.*s\n", (int)fwc->map_key.keylen, fwc->map_key.key);
-			break;
-		case fwct_simple_seq_index:
-			printf("\tsimple-seq-index: %d\n", (int)fwc->seq_index);
-			break;
-		case fwct_start_alias:
-			printf("\tstart-alias: %.*s\n", (int)fwc->alias.aliaslen, fwc->alias.alias);
-			break;
-		default:
-			break;
-		}
-	}
 
 	fy_walk_destroy(wc);
 
@@ -2555,10 +2516,33 @@ int do_build(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 	return 0;
 }
 
+static void walk_component_list_dump(struct fy_diag *diag, struct fy_walk_component_list *list, int level)
+{
+	struct fy_walk_component *fwc;
+	int ind;
+
+	for (fwc = fy_walk_component_list_head(list); fwc; fwc = fy_walk_component_next(list, fwc)) {
+		ind = (level + 1) * 2;
+		fy_notice(diag, "%-*s%-*s %.*s\n",
+				ind, "",
+				32 - ind, walk_component_type_txt[fwc->type],
+				(int)fwc->complen, fwc->comp);
+
+		if (!fy_walk_component_list_empty(&fwc->children))
+			walk_component_list_dump(diag, &fwc->children, level + 1);
+	}
+}
+
+static void walk_dump(struct fy_diag *diag, struct fy_walk_ctx *wc)
+{
+	fy_notice(diag, "walk context components:\n");
+	walk_component_list_dump(diag, &wc->components, 0);
+
+}
+
 int do_walk(struct fy_parser *fyp, const char *walkpath, const char *walkstart, int indent, int width, bool resolve, bool sort)
 {
 	struct fy_walk_ctx *wc;
-	struct fy_walk_component *fwc;
 	struct fy_walk_result_list results;
 	struct fy_walk_result *fwr;
 	struct fy_document *fyd;
@@ -2580,24 +2564,7 @@ int do_walk(struct fy_parser *fyp, const char *walkpath, const char *walkstart, 
 		return -1;
 	}
 
-	fy_notice(fyp->diag, "components:\n");
-	for (fwc = fy_walk_component_list_head(&wc->components); fwc; fwc = fy_walk_component_next(&wc->components, fwc)) {
-		fy_notice(fyp->diag, "  %-32s %.*s\n", walk_component_type_txt[fwc->type], (int)fwc->complen, fwc->comp);
-		switch (fwc->type) {
-		case fwct_simple_map_key:
-		case fwct_simple_sibling_map_key:
-			fy_notice(fyp->diag, "   simple-key: %.*s\n", (int)fwc->map_key.keylen, fwc->map_key.key);
-			break;
-		case fwct_simple_seq_index:
-			fy_notice(fyp->diag, "   simple-seq-index: %d\n", (int)fwc->seq_index);
-			break;
-		case fwct_start_alias:
-			fy_notice(fyp->diag, "   start-alias: %.*s\n", (int)fwc->alias.aliaslen, fwc->alias.alias);
-			break;
-		default:
-			break;
-		}
-	}
+	walk_dump(fyp->diag, wc);
 
 	count = 0;
 	while ((fyd = fy_parse_load_document(fyp)) != NULL) {

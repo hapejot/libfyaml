@@ -4224,20 +4224,22 @@ struct fy_walk_component *fy_walk_component_alloc(void)
 	if (!fwc)
 		return NULL;
 	memset(fwc, 0, sizeof(*fwc));
+	fy_walk_component_list_init(&fwc->children);
 
 	return fwc;
 }
 
 void fy_walk_component_free(struct fy_walk_component *fwc)
 {
+	struct fy_walk_component *fwcn;
+
 	if (!fwc)
 		return;
 
+	while ((fwcn = fy_walk_component_list_pop(&fwc->children)) != NULL)
+		fy_walk_component_free(fwcn);
+
 	switch (fwc->type) {
-	case fwct_simple_map_key:
-		if (fwc->map_key.key_alloc)
-			free(fwc->map_key.key_alloc);
-		break;
 	case fwct_map_key:
 		if (fwc->map_key.fyd)
 			fy_document_destroy(fwc->map_key.fyd);
@@ -4264,278 +4266,6 @@ void fy_walk_destroy(struct fy_walk_ctx *wc)
 
 	free(wc);
 }
-
-#if 0
-static bool is_walk_plain_key(const char *s, size_t len)
-{
-	const char *e = s + len, *t;
-
-	if (!len)
-		return false;
-
-	if (fy_utf8_strchr(",[]{}#&*!|<>'\"%@`?:-0123456789", *s))
-		return false;
-
-	t = s;
-	t++;
-	while (t < e && !fy_utf8_strchr(",[]{}#&*!|<>'\"%@`?:", *t))
-		t++;
-
-	return t >= e;
-}
-#endif
-
-#if 0
-static bool is_walk_plain_index(const char *s, size_t len)
-{
-	const char *e = s + len;
-
-	if (!len)
-		return false;
-
-	/* skip sign */
-	if (*s == '-')
-		s++;
-
-	/* nothing else afterwards? */
-	if (s >= e)
-		return false;
-
-	while (s < e && isdigit(*s))
-		s++;
-
-	/* true only when all the input has been consumed */
-	return s >= e;
-}
-#endif
-
-#if 0
-struct fy_walk_component *
-fy_walk_add_component(struct fy_walk_ctx *wc,
-		      const char *comp, size_t complen,
-		      enum fy_walk_component_type type,
-		      struct fy_diag *diag)
-{
-	struct fy_walk_component *fwc;
-	const char *s, *e, *t;
-	char *ss, *ee;
-	size_t len, rlen, allocsz;
-	bool multi = false;
-	bool singleq = false;
-	uint8_t code[4], *tt;
-	char *end_idx;
-	bool sibling_mark;
-	int ret;
-
-	if (!wc || !comp)
-		return NULL;
-
-	/* the pointer must lie in the walk context buffer */
-	assert(comp >= wc->path && comp + complen <= wc->path + wc->pathlen);
-
-	fwc = fy_walk_component_alloc();
-	if (!fwc) {
-		fy_notice(diag, "%s: fy_walk_component_alloc() failed\n", __func__);
-		goto err_out;
-	}
-	fwc->comp = comp;
-	fwc->complen = complen;
-
-	if (type != fwct_none)
-		goto skip_find_analysis;
-
-	s = comp;
-	e = comp + complen;
-	len = e - s;
-
-	if (!len) {
-		fy_notice(diag, "%s: can't analyze with len=0\n", __func__);
-		goto err_out;
-	}
-
-	/* long form .(x) */
-	if (len >= 4 && s[0] == '.' && s[1] == '(' && s[len - 1] == ')') {
-		/* XXX todo */
-		fy_notice(diag, "%s: long form not supported for now...\n", __func__);
-		goto err_out;
-	}
-
-	/* ./ this */
-	if (len == 1 && s[0] == '.') {
-		type = fwct_this;
-		goto skip_find_analysis;
-	}
-
-	/* ../ parent */
-	if (len == 2 && s[0] == '.' && s[1] == '.') {
-		type = fwct_parent;
-		goto skip_find_analysis;
-	}
-
-	/* ^/ root */
-	if (len == 1 && s[0] == '^') {
-		type = fwct_root;
-		goto skip_find_analysis;
-	}
-
-	// /* every immediate child node
-	if (len == 1 && s[0] == '*') {
-		type = fwct_every_child;
-		multi = true;
-		goto skip_find_analysis;
-	}
-
-	// /** every child node recursive
-	if (len == 2 && s[0] == '*' && s[1] == '*') {
-		type = fwct_every_child_r;
-		multi = true;
-		goto skip_find_analysis;
-	}
-
-	// /**$ every leaf node
-	if (len == 3 && s[0] == '*' && s[1] == '*' && s[2] == '$') {
-		type = fwct_every_leaf;
-		multi = true;
-		goto skip_find_analysis;
-	}
-
-	sibling_mark = len >= 2 && s[0] == ':';
-	if (sibling_mark) {
-		s++;
-		len--;
-	}
-
-	/* plain index */
-	if (is_walk_plain_index(s, e - s)) {
-		type = fwct_simple_seq_index;
-		fwc->seq_index = (int)strtol(s, &end_idx, 10);
-		goto skip_find_analysis;
-	}
-
-	if (len >= 1 && !isdigit(s[0]) && is_simple_key(s, len)) {
-	}
-
-	/* single or double quotes */
-	if (len >= 2 && ((s[0] == '\'' && s[len-1] == '\'') ||
-			 (s[0] == '"'  && s[len-1] == '"')) ) {
-
-		singleq = s[0] == '\'';
-
-		s++;
-		e--;
-		type = fwct_simple_map_key;
-
-		/* if there's no escape no need to allocate */
-		if (!memchr(s, singleq ? '\'' : '\\', e-s)) {
-			fwc->map_key.key_alloc = NULL;
-			fwc->map_key.key = s;
-			fwc->map_key.keylen = e - s;
-			fy_notice(diag, "%s: single chunk simple key %.*s\n", __func__, (int)fwc->map_key.keylen, fwc->map_key.key);
-			goto skip_find_analysis;
-		}
-
-		/* there are escapes, allocate worse case */
-		allocsz = e - s;
-		if (!singleq)
-			allocsz *= 2;	/* for double quotes escapes might grow the key */
-		fwc->map_key.key_alloc = malloc(allocsz + 1);
-		if (!fwc->map_key.key_alloc) {
-			fy_notice(diag, "%s: quote alloc() failed\n", __func__);
-			goto err_out;
-		}
-		ss = fwc->map_key.key_alloc;
-		ee = ss + (e - s);
-		fwc->map_key.key = ss;
-
-		while (s < e) {
-			/* find next single quote */
-			t = memchr(s, singleq ? '\'' : '\\', e - s);
-			rlen = (t ? t : e) - s;
-
-			assert(ss + rlen <= ee);
-			memcpy(ss, s, rlen);
-
-			fy_notice(diag, "%s: chunk simple key %.*s\n", __func__, (int)rlen, ss);
-
-			ss += rlen;
-			s += rlen;
-
-
-			/* end of string */
-			if (!t)
-				break;
-
-			ret = fy_utf8_parse_escape(&t, e - t, singleq ? fyue_singlequote : fyue_doublequote);
-			if (ret < 0) {
-				fy_notice(diag, "%s: %s-quoted component bad escape\n", __func__,
-						singleq ? "single" : "double");
-				goto err_out;
-			}
-			s = t;
-
-			tt = fy_utf8_put(code, sizeof(code), ret);
-			if (!tt) {
-				fy_notice(diag, "%s: %s-quoted component escape can't put\n", __func__,
-						singleq ? "single" : "double");
-				goto err_out;
-			}
-
-			/* copy it out */
-			rlen = tt - code;
-
-			assert(ss + rlen <= ee);
-			memcpy(ss, code, rlen);
-			ss += rlen;
-		}
-		fwc->map_key.keylen = ss - fwc->map_key.key;
-		goto skip_find_analysis;
-	}
-
-	/* number */
-	if ((len >= 1 && isdigit(s[0])) || (len >= 2 && s[0] == '-' && isdigit(s[1]))) {
-		ret = (int)strtol(s, &end_idx, 10);
-		if ((ret == 0 && s == end_idx) || end_idx != e) {
-			fy_notice(diag, "%s: bad sequence index\n", __func__);
-			goto err_out;
-		}
-		type = fwct_simple_seq_index;
-		fwc->seq_index = ret;
-		goto skip_find_analysis;
-	}
-
-	/* plain... */
-	if (is_walk_plain_key(s, e - s)) {
-		type = fwct_simple_map_key;
-
-		fwc->map_key.key_alloc = NULL;
-		fwc->map_key.key = s;
-		fwc->map_key.keylen = e - s;
-		fy_notice(diag, "%s: plain simple key %.*s\n", __func__, (int)fwc->map_key.keylen, fwc->map_key.key);
-		goto skip_find_analysis;
-	}
-
-	/* sibling plain key */
-	if ((e - s) >= 2 && *s ==  ':' && is_walk_plain_key(s + 1, e - s - 1)) {
-		type = fwct_simple_sibling_map_key;
-
-		fwc->map_key.key_alloc = NULL;
-		fwc->map_key.key = s + 1;
-		fwc->map_key.keylen = e - s - 1;
-		fy_notice(diag, "%s: plain sibling simple key %.*s\n", __func__, (int)fwc->map_key.keylen, fwc->map_key.key);
-		goto skip_find_analysis;
-	}
-
-skip_find_analysis:
-	fwc->type = type;
-	fwc->multi = multi;
-
-	fy_walk_component_list_add_tail(&wc->components, fwc);
-	return fwc;
-
-err_out:
-	return NULL;
-}
-#endif
 
 static bool walk_container_is_startc(int c)
 {
@@ -4646,10 +4376,58 @@ static int walk_container_get_extent(const char *s, size_t len, const char **nex
 	return 0;
 }
 
+static int walk_numeric_slice_get_extent(const char *s, size_t len, const char **next, struct fy_diag *diag)
+{
+	const char *ss = s;
+	const char *e = s + len;
+	const char *t;
+
+	if (!len)
+		goto ok;
+
+	/* slices are always zero or positive */
+
+	t = s;
+	while (s < e && isdigit(*s))
+		s++;
+
+	/* no digits consumed at all? */
+	if (t == s) {
+		s = ss;
+		goto ok;
+	}
+
+	/* a numeric slice must exist */
+	if (s >= e || *s != ':') {
+		s = ss;
+		goto ok;
+	}
+	s++;
+
+	/* no second range (marks end of sequence) */
+	if (s >= e)
+		goto ok;
+
+	t = s;
+	while (s < e && isdigit(*s))
+		s++;
+
+	/* no digits consumed at all? */
+	if (t == s) {
+		s = ss;
+		goto ok;
+	}
+
+ok:
+	*next = s;
+	return 0;
+}
+
 static int walk_numeric_get_extent(const char *s, size_t len, const char **next, struct fy_diag *diag)
 {
 	const char *ss = s;
 	const char *e = s + len;
+	const char *t;
 
 	if (!len)
 		goto ok;
@@ -4664,8 +4442,15 @@ static int walk_numeric_get_extent(const char *s, size_t len, const char **next,
 		goto ok;
 	}
 
+	t = s;
 	while (s < e && isdigit(*s))
 		s++;
+
+	/* no digits consumed at all? */
+	if (t == s) {
+		s = ss;
+		goto ok;
+	}
 
 ok:
 	*next = s;
@@ -4743,14 +4528,10 @@ ok:
 
 static int walk_every_child_r_get_extent(const char *s, size_t len, const char **next, struct fy_diag *diag)
 {
-	const char *e = s + len;
-
 	if (len < 2 || s[0] != '*' || s[1] != '*')
 		goto ok;
 
 	s += 2;
-	if (s < e && !strchr(",/", *s))
-		return -1;
 ok:
 	*next = s;
 	return 0;
@@ -4776,6 +4557,7 @@ enum split_type {
 	split_none = 0,
 	split_container,
 	split_numeric,
+	split_numeric_slice,
 	split_simple_key,
 	split_parent,
 	split_this,
@@ -4787,7 +4569,21 @@ enum split_type {
 struct split_desc {
 	const char *name;
 	enum split_type type;
+	enum fy_walk_component_type ctype;
 	int (*get_extent)(const char *s, size_t len, const char **next, struct fy_diag *diag);
+	bool sibling_mark;
+	bool scalar_mark;
+};
+
+struct split {
+	const struct split_desc *sd;
+	const char *s;
+	size_t len;
+	bool sibling_mark;
+	bool scalar_mark;
+	bool collection_mark;
+	bool mapping_mark;
+	bool sequence_mark;
 };
 
 static const struct split_desc split_descs[] = {
@@ -4795,40 +4591,63 @@ static const struct split_desc split_descs[] = {
 	{
 		.name		= "root",
 		.type		= split_root,
+		.ctype		= fwct_root,
 		.get_extent	= walk_root_get_extent,
 	}, {
 		.name		= "parent",
 		.type		= split_parent,
+		.ctype		= fwct_parent,
 		.get_extent	= walk_parent_get_extent,
 	}, {
 		.name		= "this",
 		.type		= split_this,
+		.ctype		= fwct_this,
 		.get_extent	= walk_this_get_extent,
+	}, {
+		.name		= "numeric-slice",
+		.type		= split_numeric_slice,
+		.ctype		= fwct_seq_slice,
+		.get_extent	= walk_numeric_slice_get_extent,
+		.sibling_mark	= true,
+		.scalar_mark	= true,
 	}, {
 		.name		= "numeric",
 		.type		= split_numeric,
+		.ctype		= fwct_seq_index,
 		.get_extent	= walk_numeric_get_extent,
+		.sibling_mark	= true,
+		.scalar_mark	= true,
 	}, {
 		.name		= "container",
 		.type		= split_container,
+		.ctype		= fwct_map_key,
 		.get_extent	= walk_container_get_extent,
+		.sibling_mark	= true,
+		.scalar_mark	= true,
 	}, {
 		.name		= "simple-key",
 		.type		= split_simple_key,
+		.ctype		= fwct_simple_map_key,
 		.get_extent	= walk_simple_key_get_extent,
+		.sibling_mark	= true,
+		.scalar_mark	= true,
 	}, {
 		.name		= "every-child-recursive",
 		.type		= split_every_child_r,
+		.ctype		= fwct_every_child_r,
 		.get_extent	= walk_every_child_r_get_extent,
+		.scalar_mark	= true,
 	}, {
 		.name		= "every-child",
 		.type		= split_every_child,
+		.ctype		= fwct_every_child,
 		.get_extent	= walk_every_child_get_extent,
+		.scalar_mark	= true,
 	},
 };
 
-static enum split_type
-walk_get_extent(const char *s, size_t len, const char **next, struct fy_diag *diag)
+static const struct split_desc *
+walk_get_split_desc(const char *s, size_t len, const char **next, struct fy_diag *diag)
 {
 	const struct split_desc *sd;
 	const char *e = s + len, *t;
@@ -4843,28 +4662,151 @@ walk_get_extent(const char *s, size_t len, const char **next, struct fy_diag *di
 		/* it's a container double quoted, single quoted, parentheses, flow seq or flow map */
 		ret = sd->get_extent(s, e - s, &t, diag);
 		if (ret)
-			return split_error;
+			return NULL;
 
 		/* if we advanced we found it */
 		if (t > s) {
 			*next = t;
-			return sd->type;
+			return sd;
 		}
 	}
 
-	return split_none;
+	return NULL;
 }
 
-struct split {
-	enum split_type type;
-	const char *s;
-	size_t len;
-	bool sibling_mark;
-	bool leaf_mark;
-	bool collection_mark;
-	bool mapping_mark;
-	bool sequence_mark;
+const char *walk_component_type_txt[] = {
+	[fwct_none]			= "none",
+	/* */
+	[fwct_start_root]		= "start-root",
+	[fwct_start_alias]		= "start-alias",
+	/* */
+	[fwct_root]			= "root",
+	[fwct_this]			= "this",
+	[fwct_parent]			= "parent",
+	[fwct_every_child]		= "every-child",
+	[fwct_every_child_r]		= "every-child-recursive",
+	[fwct_every_leaf]		= "every-leaf",
+	[fwct_assert_collection]	= "assert-collection",
+	[fwct_assert_scalar]		= "assert-scalar",
+	[fwct_assert_sequence]		= "assert-sequence",
+	[fwct_assert_mapping]		= "assert-mapping",
+	[fwct_simple_map_key]		= "simple-map-key",
+	[fwct_seq_index]		= "seq-index",
+	[fwct_seq_slice]		= "seq-slice",
+
+	[fwct_map_key]			= "map-key",
+
+	[fwct_or]			= "or",
+	[fwct_and]			= "and",
 };
+
+struct fy_walk_component *
+fy_walk_add_component(struct fy_walk_ctx *wc, struct fy_diag *diag,
+		      struct fy_walk_component *parent,
+      		      enum fy_walk_component_type type, const char *start, size_t len, ...)
+{
+	struct fy_walk_component_list *list;
+	struct fy_walk_component *fwc = NULL;
+	const char *s, *e;
+	char *buf, *end_idx;
+	va_list ap;
+
+	if (!wc || !fy_walk_component_type_is_valid(type))
+		return NULL;
+
+	fy_notice(diag, "%s: %.*s\n", __func__, (int)len, start);
+
+	s = start;
+	e = s + len;
+	assert(s >= wc->path && s < wc->path + wc->pathlen);
+	assert(e >= wc->path && e <= wc->path + wc->pathlen);
+
+	fwc = fy_walk_component_alloc();
+	if (!fwc) {
+		fy_error(diag, "%s: fy_walk_component_alloc() failed\n", __func__);
+		goto err_out;
+	}
+	fwc->parent = parent;
+	fwc->wc = wc;
+	fwc->type = type;
+	fwc->comp = start;
+	fwc->complen = len;
+
+	va_start(ap, len);
+	switch (type) {
+	case fwct_start_alias:
+		assert(len > 1);
+		fwc->alias.alias = start + 1;
+		fwc->alias.aliaslen = len - 1;
+		break;
+
+	case fwct_map_key:
+		fwc->map_key.fyd = fy_document_build_from_string(NULL, start, len);
+		if (!fwc->map_key.fyd) {
+			fy_error(diag, "%s: fy_document_build_from_string() failed\n", __func__);
+			goto err_out;
+		}
+		break;
+	case fwct_seq_index:
+		buf = alloca(len + 1);
+		memcpy(buf, start, len);
+		buf[len] = '\0';
+		fwc->seq_index.index = (int)strtol(buf, &end_idx, 10);
+		/* everything must be consumed */
+		if (*end_idx != '\0') {
+			fy_error(diag, "%s: garbage after numeric\n", __func__);
+			goto err_out;
+		}
+		break;
+
+	case fwct_seq_slice:
+		buf = alloca(len + 1);
+		memcpy(buf, start, len);
+		buf[len] = '\0';
+		fwc->seq_slice.start_index = (int)strtol(buf, &end_idx, 10);
+		/* everything must be consumed */
+		if (*end_idx != ':') {
+			fy_error(diag, "%s: garbage after first slice index\n", __func__);
+			goto err_out;
+		}
+		if (fwc->seq_slice.start_index < 0) {
+			fy_error(diag, "%s: bad sequence slice start index\n", __func__);
+			goto err_out;
+		}
+		end_idx++;
+		if (*end_idx != '\0') {
+			fwc->seq_slice.end_index = (int)strtol(end_idx, &end_idx, 10);
+			if (*end_idx != '\0') {
+				fy_error(diag, "%s: garbage after second slice index\n", __func__);
+				goto err_out;
+			}
+			if (fwc->seq_slice.end_index < 0 || fwc->seq_slice.start_index >= fwc->seq_slice.end_index) {
+				fy_error(diag, "%s: bad end sequence slice end index\n", __func__);
+				goto err_out;
+			}
+		} else {
+			fwc->seq_slice.end_index = -1;
+		}
+		break;
+
+	default:
+		/* nothing extra for those */
+		break;
+	}
+	va_end(ap);
+
+	list = parent ? &parent->children : &wc->components;
+	fy_walk_component_list_add_tail(list, fwc);
+
+	fy_notice(diag, "%s: added component %s: %.*s\n", __func__,
+			walk_component_type_txt[type], (int)len, start);
+
+	return fwc;
+
+err_out:
+	fy_walk_component_free(fwc);
+	return NULL;
+}
 
 struct fy_walk_ctx *
 fy_walk_create(const char *path, size_t len,
@@ -4872,25 +4814,22 @@ fy_walk_create(const char *path, size_t len,
 	       struct fy_diag *diag)
 {
 	struct fy_walk_ctx *wc = NULL;
-	struct fy_walk_component *fwc;
-	const char *s, *e, *ss, *comp, *t;
-	char *buf;
-	size_t complen;
-	bool sibling_mark;
-	unsigned int split_count;
-	unsigned int split_alloc;
+	struct fy_walk_component *fwc, *fwc_parent, *fwc_and, *fwc_expr_parent;
+	const char *s, *e, *ss, *t;
+	bool sibling_mark, scalar_mark;
+	const struct split_desc *sd;
+	unsigned int i, split_count, split_alloc;
 	struct split *splits, *splitse, *split;
-	enum split_type stype;
 	int c;
 
 	if (!path || !len) {
-		fy_notice(diag, "%s: path empty\n", __func__);
+		fy_error(diag, "%s: path empty\n", __func__);
 		goto err_out;
 	}
 
 	wc = malloc(sizeof(*wc));
 	if (!wc) {
-		fy_notice(diag, "%s: unable to allocate wc\n", __func__);
+		fy_error(diag, "%s: unable to allocate wc\n", __func__);
 		goto err_out;
 	}
 
@@ -4909,7 +4848,7 @@ fy_walk_create(const char *path, size_t len,
 
 	/* nothing but spaces huh? */
 	if (!len) {
-		fy_notice(diag, "%s: path empty (2)\n", __func__);
+		fy_error(diag, "%s: path empty (2)\n", __func__);
 		goto err_out;
 	}
 
@@ -4919,7 +4858,7 @@ fy_walk_create(const char *path, size_t len,
 
 	wc->path = malloc(len + 1);
 	if (!wc->path) {
-		fy_notice(diag, "%s: unable to allocate copy of path\n", __func__);
+		fy_error(diag, "%s: unable to allocate copy of path\n", __func__);
 		goto err_out;
 	}
 	memcpy(wc->path, path, len);
@@ -4959,37 +4898,36 @@ fy_walk_create(const char *path, size_t len,
 
 	/* bad alias form for path */
 	if (c == '[' || c == ']' || c == '{' || c == '}' || c == ',') {
-		fy_notice(diag, "%s: bad alias form for path\n", __func__);
+		fy_error(diag, "%s: bad alias form for path\n", __func__);
 		goto err_out;
 	}
 
 	/* it must not begin with '/' */
 	if (s == ss) {
-		fy_notice(diag, "%s: anchor but empty\n", __func__);
+		fy_error(diag, "%s: anchor but empty\n", __func__);
 		goto err_out;
 	}
 
-	fwc = fy_walk_component_alloc();
+	fwc = fy_walk_add_component(wc, diag, NULL, fwct_start_alias, s, ss - s);
 	if (!fwc) {
-		fy_notice(diag, "%s: fy_walk_component_alloc() failed\n", __func__);
+		fy_error(diag, "fy_walk_add_component() failed\n");
 		goto err_out;
 	}
-	fwc->type = fwct_start_alias;
-	fwc->comp = s;
-	fwc->complen = ss - s;
-	fwc->alias.alias = fwc->comp + 1;
-	fwc->alias.aliaslen = fwc->complen - 1;
-	fy_walk_component_list_add_tail(&wc->components, fwc);
-
-	fy_notice(diag, "%s: added start alias component %.*s\n", __func__, (int)(ss - s), s);
 
 	/* skip over the anchor and continue */
 	s = ss;
-	len = e - s;
 
 	/* if there's nothing left we're done */
-	if (!len)
+	if (s >= e)
 		goto done;
+
+	if (*s != '/') {
+		fy_error(diag, "garbage after start alias\n");
+		goto err_out;
+	}
+	s++;
+
+	len = e - s;
 
 regular_path_lookup:
 
@@ -5005,7 +4943,6 @@ regular_path_lookup:
 	split_count = 0;
 	splits = alloca(sizeof(*splits) * split_alloc);
 	splitse = splits + split_alloc;
-	split = splits;
 
 	assert(e > s && len > 0);
 
@@ -5013,37 +4950,40 @@ regular_path_lookup:
 
 		/* regular path follows (and no previous anchor) */
 		if (*s == '/' && fy_walk_component_list_empty(&wc->components)) {
+
 			/* if the component list is empty, start from root */
 
-			fwc = fy_walk_component_alloc();
+			fwc = fy_walk_add_component(wc, diag, NULL, fwct_start_root, s, 1);
 			if (!fwc) {
-				fy_notice(diag, "%s: fy_walk_component_alloc() failed\n", __func__);
+				fy_error(diag, "fy_walk_add_component() failed\n");
 				goto err_out;
 			}
-			fwc->type = fwct_start_root;
-			fwc->comp = s;
-			fwc->complen = 0;
-			fy_walk_component_list_add_tail(&wc->components, fwc);
-
-			fy_notice(diag, "%s: added start_root component\n", __func__);
-
-			if (s + 1 >= e)
+			if (++s >= e)
 				goto done;
-			s++;
 		}
 
-		comp = NULL;
-		complen = 0;
+		/* terminating / */
+		if (*s == '/' && (e - s) <= 1) {
+			fwc = fy_walk_add_component(wc, diag, NULL, fwct_assert_collection, s, 1);
+			if (!fwc) {
+				fy_error(diag, "fy_walk_add_component() failed\n");
+				goto err_out;
+			}
+			s++;
+			goto done;
+		}
 
 		/* mark start */
 		ss = s;
 
+		split = splits;
 		split_count = 0;
 		while (s < e) {
 
 			c = *s;
 
 			sibling_mark = false;
+			scalar_mark = false;
 
 			/* :<> is a sibling mark */
 			if ((e - s) >= 1 && c == ':') {
@@ -5052,26 +4992,45 @@ regular_path_lookup:
 				c = *s;
 			}
 
-			stype = walk_get_extent(s, e - s, &t, diag);
-			if (stype == split_error) {
+			sd = walk_get_split_desc(s, e - s, &t, diag);
+			if (!sd) {
 				/* everything failed */
-				fy_notice(diag, "%s: could not advance at all %.*s\n", __func__,
+				fy_error(diag, "%s: could not split to advance at all %.*s\n", __func__,
 						(int)(e - s), s);
 				goto err_out;
 			}
 
-			if (stype == split_none)
-				break;
+			if (sibling_mark && !sd->sibling_mark) {
+				fy_error(diag, "%s: component does not support sibling mark %.*s\n", __func__,
+						(int)(e - s), s);
+				goto err_out;
+			}
 
 			assert(split < splitse);
 			memset(split, 0, sizeof(*split));
-			split->type = stype;
+			split->sd = sd;
 			split->s = s;
 			split->len = t - s;
 			split->sibling_mark = sibling_mark;
 
 			fy_notice(diag, "%s: split %.*s\n", __func__,
 					(int)(t - s), s);
+
+			scalar_mark = false;
+			if (t < e) {
+				if (t + 1 >= e && *t == '$') {
+					scalar_mark = true;
+					t++;
+				}
+			}
+
+			split->scalar_mark = scalar_mark;
+
+			if (scalar_mark && !sd->scalar_mark) {
+				fy_error(diag, "%s: component does not support leaf mark %.*s\n", __func__,
+						(int)(e - s), s);
+				goto err_out;
+			}
 
 			s = t;
 			len = e - s;
@@ -5088,98 +5047,87 @@ regular_path_lookup:
 				break;
 			}
 
+			/* split or */
+			if (*s == ',') {
+				s++;
+				continue;
+			}
+
 			/* no end, comma, or slash */
-			fy_notice(diag, "%s: no end, comma or slash found %.*s\n", __func__,
+			fy_error(diag, "%s: no end, comma or slash found %.*s\n", __func__,
 					(int)(e - s), s);
 			goto err_out;
 		}
 
 		len = e - s;
 
-		fwc = fy_walk_component_alloc();
-		if (!fwc) {
-			fy_notice(diag, "%s: fy_walk_component_alloc() failed\n", __func__);
+		/* no split count is an error */
+		if (!split_count) {
+			fy_error(diag, "%s: no splits found\n", __func__);
 			goto err_out;
 		}
 
-		/* terminating / */
-		if (!split_count) {
-			fwc->type = fwct_assert_collection;
-			fwc->comp = ss;
-			fwc->complen = 0;
-
-		} else {
-
-			assert(split_count == 1);
-
-			split = splits;
-
-			comp = split->s;
-			complen = split->len;
-
-			switch (split->type) {
-			case split_container:
-				fwc->type = fwct_map_key;
-				fwc->map_key.fyd = fy_document_build_from_string(NULL, split->s, split->len);
-				if (!fwc->map_key.fyd) {
-					fy_notice(diag, "%s: fy_document_build_from_string() failed\n", __func__);
-					goto err_out;
-				}
-				break;
-			case split_numeric:
-				fwc->type = fwct_simple_seq_index;
-				buf = alloca(split->len + 1);
-				memcpy(buf, split->s, split->len);
-				buf[split->len] = '\0';
-				fwc->seq_index = (int)strtol(buf, NULL, 10);
-				break;
-			case split_simple_key:
-				fwc->type = fwct_simple_map_key;
-				fwc->map_key.key = split->s;
-				fwc->map_key.keylen = split->len;
-				break;
-			case split_parent:
-				fwc->type = fwct_parent;
-				break;
-			case split_this:
-				fwc->type = fwct_this;
-				break;
-			case split_root:
-				fwc->type = fwct_root;
-				break;
-			case split_every_child:
-				fwc->type = fwct_every_child;
-				break;
-			case split_every_child_r:
-				fwc->type = fwct_every_child_r;
-				break;
-			default:
-				abort();
-				break;
+		fwc_parent = NULL;
+		if (split_count > 1) {
+			fwc_parent = fy_walk_add_component(wc, diag, NULL, fwct_or, ss, 0);
+			if (!fwc_parent) {
+				fy_error(diag, "fy_walk_add_component() failed\n");
+				goto err_out;
 			}
-
-			fwc->comp = split->s;
-			fwc->complen = split->len;
-
 		}
 
-		fy_walk_component_list_add_tail(&wc->components, fwc);
+		
+		for (split = splits, i = 0; i < split_count; i++, split++) {
+
+			fwc_and = NULL;
+			fwc_expr_parent = fwc_parent;
+
+			if (split->sibling_mark || split->scalar_mark) {
+				fwc_and = fy_walk_add_component(wc, diag, fwc_parent, fwct_and, split->s, 0);
+				if (!fwc_and) {
+					fy_error(diag, "fy_walk_add_component() failed\n");
+					goto err_out;
+				}
+				fwc_expr_parent = fwc_and;
+			}
+
+			if (split->sibling_mark) {
+				fwc = fy_walk_add_component(wc, diag, fwc_expr_parent, fwct_parent, split->s, 0);
+				if (!fwc) {
+					fy_error(diag, "fy_walk_add_component() failed\n");
+					goto err_out;
+				}
+			}
+
+			fwc = fy_walk_add_component(wc, diag, fwc_expr_parent, split->sd->ctype, split->s, split->len);
+			if (!fwc) {
+				fy_error(diag, "fy_walk_add_component() failed\n");
+				goto err_out;
+			}
+
+			if (split->scalar_mark) {
+				fwc = fy_walk_add_component(wc, diag, fwc_expr_parent, fwct_assert_scalar, split->s + split->len, 0);
+				if (!fwc) {
+					fy_error(diag, "fy_walk_add_component() failed\n");
+					goto err_out;
+				}
+			}
+
+		}
 
 		/* terminating component with more remaining is illegal */
 		fwc = fy_walk_component_list_tail(&wc->components);
 		if (fwc && fy_walk_component_type_is_terminating(fwc->type) && s < e) {
-			fy_notice(diag, "%s: terminating component with more remaining is illegal\n", __func__);
+			fy_error(diag, "%s: terminating component with more remaining is illegal\n", __func__);
 			goto err_out;
 		}
-
-		fy_notice(diag, "%s: added component %.*s\n", __func__, (int)complen, comp);
 
 	}
 
 done:
 
 	if (fy_walk_component_list_empty(&wc->components)) {
-		fy_notice(diag, "%s: no components discovered error\n", __func__);
+		fy_error(diag, "%s: no components discovered error\n", __func__);
 		goto err_out;
 	}
 
@@ -5195,6 +5143,12 @@ err_out:
 int fy_walk_result_add(struct fy_walk_result_list *results, struct fy_node *fyn)
 {
 	struct fy_walk_result *fwr;
+
+	/* do not add multiple times */
+	for (fwr = fy_walk_result_list_head(results); fwr; fwr = fy_walk_result_next(results, fwr)) {
+		if (fwr->fyn == fyn)
+			return 0;
+	}
 
 	fwr = fy_walk_result_alloc();
 	if (!fwr) {
@@ -5244,62 +5198,159 @@ int fy_walk_result_add_recursive(struct fy_walk_result_list *results, struct fy_
 	return 0;
 }
 
+struct fy_node *
+fy_walk_component_next_node_single(struct fy_walk_component *fwc, struct fy_node *fyn)
+{
+	struct fy_anchor *fya;
+
+	assert(fwc);
+
+	/* no node, do not continue */
+	if (!fyn)
+		return NULL;
+
+	switch (fwc->type) {
+	case fwct_start_root:
+	case fwct_root:
+		return fyn->fyd->root;
+
+	case fwct_start_alias:
+		fya = fy_document_lookup_anchor(fyn->fyd, fwc->alias.alias, fwc->alias.aliaslen);
+		return fya ? fya->fyn : NULL;
+
+	case fwct_this:
+		return fyn;
+
+	case fwct_parent:
+		return fy_node_get_parent(fyn);
+
+	case fwct_simple_map_key:
+		if (!fy_node_is_mapping(fyn))
+			return NULL;
+		return fy_node_mapping_lookup_value_by_simple_key(fyn, fwc->comp, fwc->complen);
+
+	case fwct_map_key:
+		if (!fy_node_is_mapping(fyn))
+			return NULL;
+		return fy_node_mapping_lookup_value_by_key(fyn, fy_document_root(fwc->map_key.fyd));
+
+	case fwct_seq_index:
+		if (!fy_node_is_sequence(fyn))
+			return NULL;
+		return fy_node_sequence_get_by_index(fyn, fwc->seq_index.index);
+
+	case fwct_assert_collection:
+		return !fy_node_is_scalar(fyn) ? fyn : NULL;
+
+	case fwct_assert_scalar:
+		return fy_node_is_scalar(fyn) ? fyn : NULL;
+
+	case fwct_assert_sequence:
+		return fy_node_is_sequence(fyn) ? fyn : NULL;
+
+	case fwct_assert_mapping:
+		return fy_node_is_mapping(fyn) ? fyn : NULL;
+
+		/* multiple nodes */
+	case fwct_every_child:
+	case fwct_every_child_r:
+	case fwct_every_leaf:
+	case fwct_or:
+	case fwct_and:
+	case fwct_seq_slice:
+		return NULL;
+
+	default:
+		break;
+	}
+
+	return NULL;
+}
+
+struct fy_walk_component *
+fy_walk_component_next_in_seq(struct fy_walk_component *fwc)
+{
+	if (!fwc)
+		return NULL;
+
+	if (!fwc->parent)
+		return fy_walk_component_next(&fwc->wc->components, fwc);
+
+	switch (fwc->parent->type) {
+	case fwct_or:
+		return fy_walk_component_next_in_seq(fwc->parent);
+
+	case fwct_and:
+		return fy_walk_component_next(&fwc->parent->children, fwc);
+
+	default:
+		/* all others invalid */
+		break;
+	}
+
+	return NULL;
+}
+
 static int
 fy_walk_perform_internal(struct fy_walk_ctx *wc,
 			 struct fy_walk_result_list *results,
 			 struct fy_node *fyn,
 			 struct fy_walk_component *fwc)
 {
-	struct fy_anchor *fya;
-	struct fy_node *fynn = NULL, *fyni;
+	struct fy_walk_component *fwcn;
+	struct fy_node *fynn;
+	struct fy_walk_result *fwr;
+	struct fy_walk_result_list tresults;
+	struct fy_node *fyni;
 	struct fy_node_pair *fynp;
-	int ret, rret;
+	int ret, rret, start_index, end_index, i;
 
 	/* no node, do not continue */
 	if (!fyn)
 		return 0;
 
-	/* no next component? add node */
-	if (!fwc)
-		return fy_walk_result_add(results, fyn);
+	fprintf(stderr, "%s: at %s\n", __func__, fy_node_get_path_alloca(fyn));
 
-	switch (fwc->type) {
-	case fwct_start_root:
-	case fwct_root:
-		fynn = fyn->fyd->root;
-		break;
-	case fwct_start_alias:
-		fya = fy_document_lookup_anchor(fyn->fyd, fwc->alias.alias, fwc->alias.aliaslen);
-		fynn = fya ? fya->fyn : NULL;
-		break;
-	case fwct_this:
-		fynn = fyn;
-		break;
-	case fwct_parent:
-		fynn = fy_node_get_parent(fyn);
-		break;
-	case fwct_simple_map_key:
-		fynn = fy_node_mapping_lookup_value_by_simple_key(fyn, fwc->map_key.key, fwc->map_key.keylen);
-		break;
-	case fwct_map_key:
-		fynn = fy_node_mapping_lookup_value_by_key(fyn, fy_document_root(fwc->map_key.fyd));
-		break;
-	case fwct_simple_seq_index:
-		fynn = fy_node_sequence_get_by_index(fyn, fwc->seq_index);
-		break;
-	case fwct_simple_sibling_map_key:
-		fynn = fy_node_get_parent(fyn);
-		if (fynn)
-			fynn = fy_node_mapping_lookup_value_by_simple_key(fynn, fwc->map_key.key, fwc->map_key.keylen);
-		break;
-	case fwct_every_child:
+	/* we can iterate on the single component (and avoid recursion overhead) */
+	while (fwc && !fy_walk_component_type_is_multi(fwc->type)) {
 
-		if (fy_node_is_scalar(fyn)) {
-			fynn = fyn;
-			break;
+		fprintf(stderr, "%s: single '%s' before %s\n", __func__,
+				walk_component_type_txt[fwc->type], fy_node_get_path_alloca(fyn));
+
+		fyn = fy_walk_component_next_node_single(fwc, fyn);
+		if (!fyn) {
+			fprintf(stderr, "%s: single '%s' NULL\n", __func__,
+					walk_component_type_txt[fwc->type]);
+			return 0;
 		}
 
-		fwc = fy_walk_component_next(&wc->components, fwc);
+		fprintf(stderr, "%s: single '%s' after %s (1)\n", __func__,
+				walk_component_type_txt[fwc->type], fy_node_get_path_alloca(fyn));
+
+		fwc = fy_walk_component_next_in_seq(fwc);
+
+		fprintf(stderr, "%s: single '%s' after %s (2)\n", __func__,
+				fwc ? walk_component_type_txt[fwc->type] : "NULL", fy_node_get_path_alloca(fyn));
+	}
+
+	/* no next component? add node */
+	if (!fwc) {
+		fprintf(stderr, "%s: adding result %s\n", __func__, fy_node_get_path_alloca(fyn));
+		return fy_walk_result_add(results, fyn);
+	}
+
+	fprintf(stderr, "%s: multi '%s' start %s\n", __func__,
+			walk_component_type_txt[fwc->type], fy_node_get_path_alloca(fyn));
+
+	/* sanity checking */
+	assert(fyn);
+	assert(fy_walk_component_type_is_multi(fwc->type));
+
+	switch (fwc->type) {
+	case fwct_every_child:
+
+		if (fy_node_is_scalar(fyn))
+			return fy_walk_result_add(results, fyn);
 
 		rret = 0;
 		if (fy_node_is_sequence(fyn)) {
@@ -5329,19 +5380,145 @@ fy_walk_perform_internal(struct fy_walk_ctx *wc,
 		/* terminating */
 	case fwct_every_child_r:
 	case fwct_every_leaf:
-		return fy_walk_result_add_recursive(results, fyn, fwc->type == fwct_every_leaf);
 
-	case fwct_assert_collection:
-		/* no match for scalar */
-		fynn = fy_node_is_scalar(fyn) ? NULL : fyn;
-		break;
+		fwcn = fy_walk_component_next_in_seq(fwc);
+
+		if (!fwcn)
+			return fy_walk_result_add_recursive(results, fyn, fwc->type == fwct_every_leaf);
+
+		fy_walk_result_list_init(&tresults);
+
+		ret = fy_walk_result_add_recursive(&tresults, fyn, fwc->type == fwct_every_leaf);
+		if (ret) {
+			fy_walk_result_list_free(&tresults);
+			return ret;
+		}
+
+		/* next component, but starting from the results */
+		rret = 0;
+		while ((fwr = fy_walk_result_list_pop(&tresults)) != NULL) {
+
+			fprintf(stderr, "%s: and result @%s\n", __func__, fy_node_get_path_alloca(fwr->fyn));
+
+			ret = fy_walk_perform_internal(wc, results, fwr->fyn, fwcn);
+
+			fy_walk_result_free(fwr);
+
+			if (!rret && ret)
+				rret = ret;
+			if (ret)
+				break;
+		}
+
+		if (rret)
+			return rret;
+
+		return 0;
+		
+	case fwct_seq_slice:
+
+		if (!fy_node_is_sequence(fyn))
+			return 0;
+
+		start_index = fwc->seq_slice.start_index;
+		end_index = fwc->seq_slice.end_index;
+
+		if (end_index == -1)
+			end_index = fy_node_sequence_item_count(fyn);
+
+		/* if it's invalid bolt out */
+		if (start_index < 0 || end_index < 0 || start_index >= end_index)
+			return 0;
+
+		/* if the start index is off range, don't bother */
+		if (start_index >= fy_node_sequence_item_count(fyn))
+			return 0;
+
+		fwcn = fy_walk_component_next_in_seq(fwc);
+
+		rret = 0;
+		for (i = start_index; i < end_index; i++) {
+			fynn = fy_node_sequence_get_by_index(fyn, i);
+			if (!fynn)
+				continue;
+
+			ret = fy_walk_perform_internal(wc, results, fynn, fwcn);
+
+			if (!rret && ret)
+				rret = ret;
+			if (ret)
+				break;
+		}
+
+		if (rret)
+			return rret;
+
+		return 0;
+
+	case fwct_or:
+		/* go down */
+
+		rret = 0;
+		for (fwcn = fy_walk_component_list_head(&fwc->children); fwcn;
+				fwcn = fy_walk_component_next(&fwc->children, fwcn)) {
+
+			ret = fy_walk_perform_internal(wc, results, fyn, fwcn);
+			if (!rret && ret)
+				rret = ret;
+			if (ret)
+				break;
+		}
+		if (rret)
+			return rret;
+
+		return 0;
+
+	case fwct_and:
+
+		fy_walk_result_list_init(&tresults);
+
+		ret = fy_walk_perform_internal(wc, &tresults, fyn, fy_walk_component_list_head(&fwc->children));
+		if (ret) {
+			fy_walk_result_list_free(&tresults);
+			return ret;
+		}
+
+		/* if no next component, all are results */
+		fwc = fy_walk_component_next_in_seq(fwc);
+		if (!fwc) {
+			while ((fwr = fy_walk_result_list_pop(&tresults)) != NULL) {
+				fy_walk_result_add(results, fwr->fyn);
+				fy_walk_result_free(fwr);
+			}
+			return 0;
+		}
+
+		/* next component, but starting from the results */
+		rret = 0;
+		while ((fwr = fy_walk_result_list_pop(&tresults)) != NULL) {
+
+			fprintf(stderr, "%s: and result @%s\n", __func__, fy_node_get_path_alloca(fwr->fyn));
+
+			ret = fy_walk_perform_internal(wc, results, fwr->fyn, fwc);
+
+			fy_walk_result_free(fwr);
+
+			if (!rret && ret)
+				rret = ret;
+			if (ret)
+				break;
+		}
+
+		if (rret)
+			return rret;
+
+		return 0;
 
 	default:
 		break;
 	}
 
-	fwc = fy_walk_component_next(&wc->components, fwc);
-	return fy_walk_perform_internal(wc, results, fynn, fwc);
+	return 0;
 }
 
 int fy_walk_perform(struct fy_walk_ctx *wc, struct fy_walk_result_list *results, struct fy_node *fyn)
