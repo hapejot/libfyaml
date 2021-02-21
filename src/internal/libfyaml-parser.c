@@ -1307,7 +1307,7 @@ do_walk_test(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 
 	printf("creating walk for \"%s\"\n", path);
 
-	wc = fy_walk_create(path, (size_t)-1, FYNWF_FOLLOW | FYNWF_PTR_YAML, diag);
+	wc = fy_walk_create(path, (size_t)-1, diag);
 	assert(wc);
 
 	printf("walk created OK\n");
@@ -2558,7 +2558,7 @@ int do_walk(struct fy_parser *fyp, const char *walkpath, const char *walkstart, 
 
 	fy_notice(fyp->diag, "creating walk for \"%s\"\n", walkpath);
 
-	wc = fy_walk_create(walkpath, (size_t)-1, FYNWF_FOLLOW | FYNWF_PTR_YAML, fyp->diag);
+	wc = fy_walk_create(walkpath, (size_t)-1, fyp->diag);
 	if (!wc) {
 		fy_error(fyp->diag, "failed to create walk for \"%s\"\n", walkpath);
 		return -1;

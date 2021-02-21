@@ -191,13 +191,13 @@ enum fy_walk_component_type {
 	fwct_map_key,		/* complex map key (quoted, flow seq or map) */
 	fwct_seq_slice,
 
-	fwct_or,
-	fwct_and,
+	fwct_multi,
+	fwct_chain,
 };
 
 static inline bool fy_walk_component_type_is_valid(enum fy_walk_component_type type)
 {
-	return type >= fwct_start_root && type <= fwct_and;
+	return type >= fwct_start_root && type <= fwct_chain;
 }
 
 static inline bool
@@ -225,8 +225,8 @@ fy_walk_component_type_is_multi(enum fy_walk_component_type type)
 	       type == fwct_every_child_r ||
 	       type == fwct_every_leaf ||
 	       type == fwct_seq_slice ||
-	       type == fwct_or ||
-	       type == fwct_and;
+	       type == fwct_multi ||
+	       type == fwct_chain;
 }
 
 FY_TYPE_FWD_DECL_LIST(walk_component);
@@ -261,14 +261,11 @@ FY_TYPE_DECL_LIST(walk_component);
 struct fy_walk_ctx {
 	char *path;	/* work area */
 	size_t pathlen;
-	bool trailing_slash;
-	enum fy_node_walk_flags flags;
 	struct fy_walk_component_list components;
+	struct fy_walk_component *root;
 };
 
-struct fy_walk_ctx *
-fy_walk_create(const char *path, size_t len,
-	       enum fy_node_walk_flags flags, struct fy_diag *diag);
+struct fy_walk_ctx *fy_walk_create(const char *path, size_t len, struct fy_diag *diag);
 
 void fy_walk_destroy(struct fy_walk_ctx *wc);
 
