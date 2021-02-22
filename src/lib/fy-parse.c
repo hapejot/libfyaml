@@ -138,6 +138,16 @@ int fy_parse_get_next_input(struct fy_parser *fyp)
 	fyp_error_check(fyp, !rc, err_out,
 			"failed to open input");
 
+	if ((fyp->cfg.flags & (FYPCF_JSON_MASK << FYPCF_JSON_SHIFT)) == FYPCF_JSON_AUTO) {
+		s = fy_input_get_filename(fyi);
+		if (s)
+			s = strrchr(s, '.');
+		fyi->json_mode = s && !strcmp(s, ".json");
+	} else if ((fyp->cfg.flags & (FYPCF_JSON_MASK << FYPCF_JSON_SHIFT)) == FYPCF_JSON_FORCE)
+		fyi->json_mode = true;
+	else
+		fyi->json_mode = false;
+
 	/* initialize start of input */
 	fyp->current_input = fyi;
 	fyp->current_input_pos = 0;
@@ -148,16 +158,6 @@ int fy_parse_get_next_input(struct fy_parser *fyp)
 	fyp->line = 0;
 	fyp->column = 0;
 	fyp->nontab_column = 0;
-
-	if ((fyp->cfg.flags & (FYPCF_JSON_MASK << FYPCF_JSON_SHIFT)) == FYPCF_JSON_AUTO) {
-		s = fy_input_get_filename(fyi);
-		if (s)
-			s = strrchr(s, '.');
-		fyi->json_mode = s && !strcmp(s, ".json");
-	} else if ((fyp->cfg.flags & (FYPCF_JSON_MASK << FYPCF_JSON_SHIFT)) == FYPCF_JSON_FORCE)
-		fyi->json_mode = true;
-	else
-		fyi->json_mode = false;
 
 	fyp_scan_debug(fyp, "get next input: new input - %s mode", fyi->json_mode ? "JSON" : "YAML");
 

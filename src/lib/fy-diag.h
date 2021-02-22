@@ -147,6 +147,62 @@ void fy_parser_diag_report(struct fy_parser *fyp,
 		} \
 	} while(0)
 
+/* reader diagnostics */
+
+struct fy_reader;
+
+int fy_reader_vdiag(struct fy_reader *fyr, unsigned int flags,
+		    const char *file, int line, const char *func,
+		    const char *fmt, va_list ap);
+
+int fy_reader_diag(struct fy_reader *fyr, unsigned int flags,
+		   const char *file, int line, const char *func,
+		   const char *fmt, ...)
+			__attribute__((format(printf, 6, 7)));
+
+void fy_reader_diag_vreport(struct fy_reader *fyr,
+			    const struct fy_diag_report_ctx *fydrc,
+			    const char *fmt, va_list ap);
+void fy_reader_diag_report(struct fy_reader *fyr,
+			   const struct fy_diag_report_ctx *fydrc,
+			   const char *fmt, ...)
+		__attribute__((format(printf, 3, 4)));
+
+#ifndef NDEBUG
+
+#define fyr_debug(_fyr, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_DEBUG, \
+			__FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+#else
+
+#define fyr_debug(_fyr, _fmt, ...) \
+	do { } while(0)
+
+#endif
+
+#define fyr_info(_fyr, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_INFO, __FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+#define fyr_notice(_fyp, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_NOTICE, __FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+#define fyr_warning(_fyr, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_WARNING, __FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+#define fyr_error(_fyr, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_ERROR, __FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+
+#define fyr_error_check(_fyr, _cond, _label, _fmt, ...) \
+	do { \
+		if (!(_cond)) { \
+			fyr_error((_fyr), _fmt, ## __VA_ARGS__); \
+			goto _label ; \
+		} \
+	} while(0)
+
+
 #define _FYP_TOKEN_DIAG(_fyp, _fyt, _type, _module, _fmt, ...) \
 	do { \
 		struct fy_diag_report_ctx _drc; \
