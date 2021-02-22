@@ -274,4 +274,32 @@ int fy_walk_perform(struct fy_walk_ctx *wc, struct fy_walk_result_list *results,
 void fy_walk_result_free(struct fy_walk_result *fwr);
 void fy_walk_result_list_free(struct fy_walk_result_list *results);
 
+struct fy_path_parse_cfg {
+	int dummy;
+};
+
+enum fy_path_parser_state {
+	/* none */
+	FYPPS_NONE,
+	FYPPS_START,
+	FYPPS_SEPARATOR,
+	FYPPS_EXPRESSION,
+	FYPPS_PREFIX,
+	FYPPS_SUFFIX,
+};
+
+struct fy_path_parser {
+	struct fy_path_parse_cfg cfg;
+	struct fy_input *fyi;
+	struct fy_mark start_mark;
+	size_t current_input_pos;	/* from start of input */
+	const void *current_ptr;
+	int current_c;			/* current utf8 character at current_ptr (-1 if not cached) */
+	int current_w;			/* current utf8 character width */
+	size_t current_left;		/* currently left characters into the buffer */
+	int line;			/* always on input */
+	int column;
+	struct fy_diag *diag;
+};
+
 #endif
