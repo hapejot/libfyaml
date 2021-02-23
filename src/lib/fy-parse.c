@@ -49,6 +49,24 @@ void fy_eventp_release(struct fy_eventp *fyep)
 	fy_parse_eventp_recycle(fyep->fyp, fyep);
 }
 
+int fy_parse_input_append(struct fy_parser *fyp, const struct fy_input_cfg *fyic)
+{
+	struct fy_input *fyi = NULL;
+
+	fyi = fy_parse_input_create(fyp, fyic);
+	fyp_error_check(fyp, fyp != NULL, err_out,
+			"fy_parse_input_create() failed!");
+
+	fyi->state = FYIS_QUEUED;
+	fy_input_list_add_tail(&fyp->queued_inputs, fyi);
+
+	return 0;
+
+err_out:
+	fy_input_unref(fyi);
+	return -1;
+}
+
 const void *fy_ptr_slow_path(struct fy_parser *fyp, size_t *leftp)
 {
 	struct fy_input *fyi;

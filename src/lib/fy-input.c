@@ -616,7 +616,7 @@ err_out:
 	return NULL;
 }
 
-int fy_parse_input_append(struct fy_parser *fyp, const struct fy_input_cfg *fyic)
+struct fy_input *fy_parse_input_create(struct fy_parser *fyp, const struct fy_input_cfg *fyic)
 {
 	struct fy_input *fyi = NULL;
 	int ret;
@@ -694,14 +694,11 @@ int fy_parse_input_append(struct fy_parser *fyp, const struct fy_input_cfg *fyic
 		break;
 	}
 
-	fyi->state = FYIS_QUEUED;
-	fy_input_list_add_tail(&fyp->queued_inputs, fyi);
-
-	return 0;
+	return fyi;
 
 err_out:
 	fy_input_unref(fyi);
-	return -1;
+	return NULL;
 }
 
 void fy_reader_init(struct fy_reader *fyr, struct fy_input *fyi,
