@@ -608,8 +608,8 @@ int do_copy(struct fy_parser *fyp)
 
 	count = 0;
 	for (;;) {
-		line = fyp->line;
-		column = fyp->column;
+		line = fyp_line(fyp);
+		column = fyp_column(fyp);
 
 		c = fy_parse_get(fyp);
 		if (c < 0) {
@@ -2648,7 +2648,7 @@ int do_reader(struct fy_parser *fyp, int indent, int width, bool resolve, bool s
 	fyr = &parser.reader;
 	parser.diag = diag;
 
-	fy_reader_init(fyr, &test_parser_reader_ops);
+	fy_reader_setup(fyr, &test_parser_reader_ops);
 	fyr_notice(fyr, "Reader initialized\n");
 
 	r = fy_reader_input_open(fyr, fyi, NULL);

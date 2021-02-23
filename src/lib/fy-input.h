@@ -223,11 +223,6 @@ struct fy_input *fy_input_from_malloc_data(char *data, size_t size,
 
 void fy_input_close(struct fy_input *fyi);
 
-int fy_parse_input_open(struct fy_parser *fyp, struct fy_input *fyi);
-int fy_parse_input_done(struct fy_parser *fyp);
-const void *fy_parse_input_try_pull(struct fy_parser *fyp, struct fy_input *fyi,
-				    size_t pull, size_t *leftp);
-
 struct fy_reader;
 
 struct fy_reader_ops {
@@ -254,14 +249,15 @@ struct fy_reader {
 
 	int line;			/* always on input */
 	int column;
-	int tabsize;			/* very experimental tab size for indent purposes */
 	int nontab_column;		/* column without accounting for tabs */
+
+	int tabsize;			/* very experimental tab size for indent purposes */
 
 	struct fy_diag *diag;
 };
 
 void fy_reader_reset(struct fy_reader *fyr);
-void fy_reader_init(struct fy_reader *fyr, const struct fy_reader_ops *ops);
+void fy_reader_setup(struct fy_reader *fyr, const struct fy_reader_ops *ops);
 void fy_reader_cleanup(struct fy_reader *fyr);
 
 int fy_reader_input_open(struct fy_reader *fyr, struct fy_input *fyi, const struct fy_reader_input_cfg *icfg);
@@ -269,6 +265,60 @@ int fy_reader_input_done(struct fy_reader *fyr);
 
 const void *fy_reader_ptr_slow_path(struct fy_reader *fyr, size_t *leftp);
 const void *fy_reader_ensure_lookahead_slow_path(struct fy_reader *fyr, size_t size, size_t *leftp);
+
+static inline struct fy_input *
+fy_reader_current_input(const struct fy_reader *fyr)
+{
+	if (!fyr)
+		return NULL;
+	return fyr->current_input;
+}
+
+static inline uint64_t
+fy_reader_current_input_generation(const struct fy_reader *fyr)
+{
+	if (!fyr || !fyr->current_input)
+		return 0;
+	return fyr->current_input->generation;
+}
+
+static inline int
+fy_reader_column(const struct fy_reader *fyr)
+{
+	if (!fyr)
+		return -1;
+	return fyr->column;
+}
+
+static inline int
+fy_reader_tabsize(const struct fy_reader *fyr)
+{
+	if (!fyr)
+		return -1;
+	return fyr->tabsize;
+}
+
+static inline int
+fy_reader_line(const struct fy_reader *fyr)
+{
+	if (!fyr)
+		return -1;
+	return fyr->line;
+}
+
+/* force new line at the end of stream */
+static inline void fy_reader_stream_end(struct fy_reader *fyr)
+{
+	if (!fyr)
+		return;
+
+	/* force new line */
+	if (fyr->column) {
+		fyr->column = 0;
+		fyr->nontab_column = 0;
+		fyr->line++;
+	}
+}
 
 static inline void
 fy_reader_get_mark(struct fy_reader *fyr, struct fy_mark *fym)
@@ -289,6 +339,12 @@ fy_reader_ptr(struct fy_reader *fyr, size_t *leftp)
 	}
 
 	return fy_reader_ptr_slow_path(fyr, leftp);
+}
+
+/* XXX */
+static inline bool fy_reader_json_mode(const struct fy_reader *fyr)
+{
+	return fyr && fyr->current_input && fyr->current_input->json_mode;
 }
 
 static inline bool

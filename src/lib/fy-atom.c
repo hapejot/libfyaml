@@ -32,18 +32,15 @@ void fy_fill_atom_start(struct fy_parser *fyp, struct fy_atom *handle)
 	/* start mark */
 	fy_get_mark(fyp, &handle->start_mark);
 	handle->end_mark = handle->start_mark;
-	handle->fyi = fyp->current_input;
-	handle->fyi_generation = fyp->current_input->generation;
+	handle->fyi = fyp_current_input(fyp);
+	handle->fyi_generation = fyp_current_input_generation(fyp);
 
-	assert(fyp->current_input);
 	/* note that handle->data may be zero for empty input */
 }
 
 void fy_fill_atom_end_at(struct fy_parser *fyp, struct fy_atom *handle,
 			 struct fy_mark *end_mark)
 {
-	assert(!fyp->current_input || handle->fyi == fyp->current_input);
-
 	if (end_mark)
 		handle->end_mark = *end_mark;
 	else
@@ -101,8 +98,8 @@ int fy_advance_mark(struct fy_parser *fyp, int advance, struct fy_mark *m)
 		if (is_line_break) {
 			m->column = 0;
 			m->line++;
-		} else if (fyp->tabsize && fy_is_tab(c))
-			m->column += (fyp->tabsize - (fyp->column % fyp->tabsize));
+		} else if (fyp_tabsize(fyp) && fy_is_tab(c))
+			m->column += (fyp_tabsize(fyp) - (fyp_column(fyp) % fyp_tabsize(fyp)));
 		else
 			m->column++;
 	}
@@ -155,7 +152,7 @@ struct fy_atom *fy_fill_atom_at(struct fy_parser *fyp, int advance, int count, s
 	(void)rc;
 	/* ignore the return, if the advance failed, it's the end of input */
 
-	return fy_fill_atom_mark(fyp->current_input, &start_mark, &end_mark, handle);
+	return fy_fill_atom_mark(fyp_current_input(fyp), &start_mark, &end_mark, handle);
 }
 
 static inline void

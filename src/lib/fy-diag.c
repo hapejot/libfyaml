@@ -523,8 +523,8 @@ int fy_parser_vdiag(struct fy_parser *fyp, unsigned int flags,
 	fydc.source_file = file;
 	fydc.source_line = line;
 	fydc.source_func = func;
-	fydc.line = fyp->line;
-	fydc.column = fyp->column;
+	fydc.line = fyp_line(fyp);
+	fydc.column = fyp_column(fyp);
 
 	rc = fy_vdiag(fyp->diag, &fydc, fmt, ap);
 
