@@ -2609,6 +2609,70 @@ int do_walk(struct fy_parser *fyp, const char *walkpath, const char *walkstart, 
 	return count > 0 ? 0 : -1;
 }
 
+struct test_parser {
+	struct fy_reader reader;
+	struct fy_diag *diag;
+	struct fy_input *fyi;
+};
+
+struct fy_diag *test_parser_reader_get_diag(struct fy_reader *fyr)
+{
+	struct test_parser *parser = container_of(fyr, struct test_parser, reader);
+	return parser->diag;
+}
+
+static const struct fy_reader_ops test_parser_reader_ops = {
+	.get_diag = test_parser_reader_get_diag,
+	.file_open = NULL,
+};
+
+int do_reader(struct fy_parser *fyp, int indent, int width, bool resolve, bool sort)
+{
+	const char *data = "this is a test";
+	struct test_parser parser;
+	struct fy_diag_cfg dcfg;
+	struct fy_diag *diag;
+	struct fy_reader *fyr;
+	struct fy_input *fyi;
+	char ubuf[5];
+	int c, r;
+
+	fy_diag_cfg_default(&dcfg);
+	diag = fy_diag_create(&dcfg);
+	assert(diag);
+
+	fyi = fy_input_from_data(data, FY_NT, NULL, false);
+	assert(fyi);
+
+	memset(&parser, 0, sizeof(parser));
+	fyr = &parser.reader;
+	parser.diag = diag;
+
+	fy_reader_init(fyr, &test_parser_reader_ops);
+	fyr_notice(fyr, "Reader initialized\n");
+
+	r = fy_reader_input_open(fyr, fyi, NULL);
+	assert(!r);
+	fyr_notice(fyr, "Reader input opened\n");
+
+	while ((c = fy_reader_get(fyr)) >= 0) {
+		fy_utf8_put_unchecked(ubuf, c);
+		fyr_notice(fyr,  "%.*s %d\n", (int)fy_utf8_width(c), ubuf, c);
+	}
+
+	fy_reader_input_done(fyr);
+	fyr_notice(fyr, "Reader input done\n");
+
+	fy_input_close(fyi);
+
+	fy_reader_cleanup(fyr);
+
+	fy_input_unref(fyi);
+	fy_diag_destroy(diag);
+
+	return 0;
+}
+
 
 static int modify_module_flags(const char *what, unsigned int *flagsp)
 {
@@ -2875,7 +2939,8 @@ int main(int argc, char *argv[])
 	    strcmp(mode, "testsuite") &&
 	    strcmp(mode, "dump") &&
 	    strcmp(mode, "build") &&
-	    strcmp(mode, "walk")
+	    strcmp(mode, "walk") &&
+	    strcmp(mode, "reader")
 #if defined(HAVE_LIBYAML) && HAVE_LIBYAML
 	    && strcmp(mode, "libyaml-scan")
 	    && strcmp(mode, "libyaml-parse")
@@ -3045,6 +3110,12 @@ int main(int argc, char *argv[])
 		rc = do_walk(fyp, walkpath, walkstart, indent, width, resolve, sort);
 		if (rc < 0) {
 			/* fprintf(stderr, "do_walk() error %d\n", rc); */
+			goto cleanup;
+		}
+	} else if (!strcmp(mode, "reader")) {
+		rc = do_reader(fyp, indent, width, resolve, sort);
+		if (rc < 0) {
+			/* fprintf(stderr, "do_reader() error %d\n", rc); */
 			goto cleanup;
 		}
 	}

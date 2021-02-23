@@ -127,6 +127,9 @@ static void fy_input_from_data_setup(struct fy_input *fyi,
 	fyi->chunk = 0;
 	fyi->fp = NULL;
 
+	if (!handle)
+		goto out;
+
 	if (size > 0)
 		aflags = fy_analyze_scalar_content(fyi, data, size);
 	else
@@ -166,7 +169,7 @@ static void fy_input_from_data_setup(struct fy_input *fyi,
 	handle->fyi = fyi;
 	handle->fyi_generation = fyi->generation;
 	handle->tabsize = 0;
-
+out:
 	fyi->state = FYIS_PARSED;
 }
 
@@ -616,127 +619,54 @@ err_out:
 	return NULL;
 }
 
-struct fy_input *fy_parse_input_create(struct fy_parser *fyp, const struct fy_input_cfg *fyic)
+struct fy_diag *fy_reader_get_diag(struct fy_reader *fyr)
 {
-	struct fy_input *fyi = NULL;
-	int ret;
+	if (fyr && fyr->ops && fyr->ops->get_diag)
+		return fyr->ops->get_diag(fyr);
 
-	fyi = fy_input_alloc();
-	fyp_error_check(fyp, fyp != NULL, err_out,
-			"fy_input_alloc() failed!");
-
-	fyi->cfg = *fyic;
-
-	/* copy filename pointers and switch */
-	switch (fyic->type) {
-	case fyit_file:
-		fyi->name = strdup(fyic->file.filename);
-		break;
-	case fyit_stream:
-		if (fyic->stream.name)
-			fyi->name = strdup(fyic->stream.name);
-		else if (fyic->stream.fp == stdin)
-			fyi->name = strdup("<stdin>");
-		else {
-			ret = asprintf(&fyi->name, "<stream-%d>",
-					fileno(fyic->stream.fp));
-			if (ret == -1)
-				fyi->name = NULL;
-		}
-		break;
-	case fyit_memory:
-		ret = asprintf(&fyi->name, "<memory-@0x%p-0x%p>",
-			fyic->memory.data, fyic->memory.data + fyic->memory.size - 1);
-		if (ret == -1)
-			fyi->name = NULL;
-		break;
-	case fyit_alloc:
-		ret = asprintf(&fyi->name, "<alloc-@0x%p-0x%p>",
-			fyic->memory.data, fyic->memory.data + fyic->memory.size - 1);
-		if (ret == -1)
-			fyi->name = NULL;
-		break;
-	default:
-		assert(0);
-		break;
-	}
-	fyp_error_check(fyp, fyi->name, err_out,
-			"fyi->name alloc() failed!");
-
-	fyi->buffer = NULL;
-	fyi->allocated = 0;
-	fyi->read = 0;
-	fyi->chunk = 0;
-	fyi->fp = NULL;
-
-	switch (fyi->cfg.type) {
-	case fyit_file:
-		memset(&fyi->file, 0, sizeof(fyi->file));
-		fyi->file.fd = -1;
-		fyi->file.addr = MAP_FAILED;
-		break;
-
-		/* nothing for those two */
-	case fyit_stream:
-		memset(&fyi->stream, 0, sizeof(fyi->stream));
-		break;
-
-	case fyit_memory:
-		/* nothing to do for memory */
-		break;
-
-	case fyit_alloc:
-		/* nothing to do for memory */
-		break;
-
-	default:
-		assert(0);
-		break;
-	}
-
-	return fyi;
-
-err_out:
-	fy_input_unref(fyi);
 	return NULL;
-}
-
-void fy_reader_init(struct fy_reader *fyr, struct fy_input *fyi,
-		    struct fy_mark *start_mark, enum fy_parse_cfg_flags pflags,
-		    struct fy_diag *diag)
-{
-	if (!fyr || !fyi)
-		return;
-
-	memset(fyr, 0, sizeof(*fyr));
-
-	fyr->current_input = fyi;
-	fyr->current_input_pos = 0;
-	fyr->current_c = -1;
-	fyr->current_w = 0;
-	fyr->current_left = 0;
-	fyr->current_ptr = NULL;
-	fyr->line = 0;
-	fyr->column = 0;
-	fyr->nontab_column = 0;
-
-	fyr->pflags = pflags;
-	fyr->diag = diag;
 }
 
 int fy_reader_file_open(struct fy_reader *fyr, const char *filename)
 {
-	if (!fyr)
+	if (!fyr || !filename)
 		return -1;
 
 	if (fyr->ops && fyr->ops->file_open)
 		return fyr->ops->file_open(fyr, filename);
 
-	/* if no file open hook, direct open */
 	return open(filename, O_RDONLY);
 }
 
-int fy_reader_input_open(struct fy_reader *fyr, struct fy_input *fyi)
+
+void fy_reader_reset(struct fy_reader *fyr)
+{
+	if (!fyr)
+		return;
+
+	memset(fyr, 0, sizeof(*fyr));
+	fyr->current_c = -1;
+}
+
+void fy_reader_init(struct fy_reader *fyr, const struct fy_reader_ops *ops)
+{
+	if (!fyr)
+		return;
+
+	fy_reader_reset(fyr);
+	fyr->ops = ops;
+	fyr->diag = fy_reader_get_diag(fyr);
+}
+
+void fy_reader_cleanup(struct fy_reader *fyr)
+{
+	if (!fyr)
+		return;
+	fy_input_unref(fyr->current_input);
+	fy_reader_reset(fyr);
+}
+
+int fy_reader_input_open(struct fy_reader *fyr, struct fy_input *fyi, const struct fy_reader_input_cfg *icfg)
 {
 	struct stat sb;
 	int fd, rc;
@@ -744,7 +674,14 @@ int fy_reader_input_open(struct fy_reader *fyr, struct fy_input *fyi)
 	if (!fyi)
 		return -1;
 
-	assert(fyi->state == FYIS_QUEUED);
+	/* unref any previous input */
+	fy_input_unref(fyr->current_input);
+	fyr->current_input = fy_input_ref(fyi);
+
+	if (!icfg)
+		memset(&fyr->current_input_cfg, 0, sizeof(fyr->current_input_cfg));
+	else
+		fyr->current_input_cfg = *icfg;
 
 	/* reset common data */
 	fyi->buffer = NULL;
@@ -767,7 +704,7 @@ int fy_reader_input_open(struct fy_reader *fyr, struct fy_input *fyi)
 		fyi->file.length = sb.st_size;
 
 		/* only map if not zero (and is not disabled) */
-		if (sb.st_size > 0 && !(fyr->pflags & FYPCF_DISABLE_MMAP_OPT)) {
+		if (sb.st_size > 0 && !fyr->current_input_cfg.disable_mmap_opt) {
 			fyi->file.addr = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE,
 					fyi->file.fd, 0);
 
@@ -1084,6 +1021,90 @@ const void *fy_reader_input_try_pull(struct fy_reader *fyr, struct fy_input *fyi
 err_out:
 	if (leftp)
 		*leftp = 0;
+	return NULL;
+}
+
+struct fy_input *fy_input_create(const struct fy_input_cfg *fyic)
+{
+	struct fy_input *fyi = NULL;
+	int ret;
+
+	fyi = fy_input_alloc();
+	if (!fyi)
+		return NULL;
+	fyi->cfg = *fyic;
+
+	/* copy filename pointers and switch */
+	switch (fyic->type) {
+	case fyit_file:
+		fyi->name = strdup(fyic->file.filename);
+		break;
+	case fyit_stream:
+		if (fyic->stream.name)
+			fyi->name = strdup(fyic->stream.name);
+		else if (fyic->stream.fp == stdin)
+			fyi->name = strdup("<stdin>");
+		else {
+			ret = asprintf(&fyi->name, "<stream-%d>",
+					fileno(fyic->stream.fp));
+			if (ret == -1)
+				fyi->name = NULL;
+		}
+		break;
+	case fyit_memory:
+		ret = asprintf(&fyi->name, "<memory-@0x%p-0x%p>",
+			fyic->memory.data, fyic->memory.data + fyic->memory.size - 1);
+		if (ret == -1)
+			fyi->name = NULL;
+		break;
+	case fyit_alloc:
+		ret = asprintf(&fyi->name, "<alloc-@0x%p-0x%p>",
+			fyic->memory.data, fyic->memory.data + fyic->memory.size - 1);
+		if (ret == -1)
+			fyi->name = NULL;
+		break;
+	default:
+		assert(0);
+		break;
+	}
+	if (!fyi->name)
+		goto err_out;
+
+	fyi->buffer = NULL;
+	fyi->allocated = 0;
+	fyi->read = 0;
+	fyi->chunk = 0;
+	fyi->fp = NULL;
+
+	switch (fyi->cfg.type) {
+	case fyit_file:
+		memset(&fyi->file, 0, sizeof(fyi->file));
+		fyi->file.fd = -1;
+		fyi->file.addr = MAP_FAILED;
+		break;
+
+		/* nothing for those two */
+	case fyit_stream:
+		memset(&fyi->stream, 0, sizeof(fyi->stream));
+		break;
+
+	case fyit_memory:
+		/* nothing to do for memory */
+		break;
+
+	case fyit_alloc:
+		/* nothing to do for memory */
+		break;
+
+	default:
+		assert(0);
+		break;
+	}
+
+	return fyi;
+
+err_out:
+	fy_input_unref(fyi);
 	return NULL;
 }
 

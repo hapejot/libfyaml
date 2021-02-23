@@ -83,6 +83,17 @@ void fy_diag_cfg_from_parser_flags(struct fy_diag_cfg *cfg, enum fy_parse_cfg_fl
 	cfg->show_module = !!(pflags & FYPCF_DEBUG_DIAG_MODULE);
 }
 
+enum fy_parse_cfg_flags fy_diag_parser_flags_from_cfg(const struct fy_diag_cfg *cfg)
+{
+	return ((cfg->level & FYPCF_DEBUG_LEVEL_MASK) << FYPCF_DEBUG_LEVEL_SHIFT) |
+	       ((cfg->module_mask & FYPCF_MODULE_SHIFT) << FYPCF_MODULE_SHIFT) |
+	       (cfg->colorize ? FYPCF_COLOR_FORCE : FYPCF_COLOR_NONE) |
+	       (cfg->show_source ? FYPCF_DEBUG_DIAG_SOURCE : 0) |
+	       (cfg->show_position ? FYPCF_DEBUG_DIAG_POSITION : 0) |
+	       (cfg->show_type ? FYPCF_DEBUG_DIAG_TYPE : 0) |
+	       (cfg->show_module ? FYPCF_DEBUG_DIAG_MODULE : 0);
+}
+
 static void
 fy_diag_cfg_default_widths(struct fy_diag_cfg *cfg)
 {
@@ -660,7 +671,7 @@ int fy_reader_vdiag(struct fy_reader *fyr, unsigned int flags,
 
 	/* perform the enable tests early to avoid the overhead */
 	fydc_level = (flags & FYDF_LEVEL_MASK) >> FYDF_LEVEL_SHIFT;
-	fyd_level = (fyr->pflags >> FYPCF_DEBUG_LEVEL_SHIFT) & FYPCF_DEBUG_LEVEL_MASK;
+	fyd_level = fyr->diag->cfg.level;
 
 	if (fydc_level < fyd_level)
 		return 0;

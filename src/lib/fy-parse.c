@@ -53,7 +53,7 @@ int fy_parse_input_append(struct fy_parser *fyp, const struct fy_input_cfg *fyic
 {
 	struct fy_input *fyi = NULL;
 
-	fyi = fy_parse_input_create(fyp, fyic);
+	fyi = fy_input_create(fyic);
 	fyp_error_check(fyp, fyp != NULL, err_out,
 			"fy_parse_input_create() failed!");
 

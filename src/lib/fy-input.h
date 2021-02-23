@@ -212,7 +212,7 @@ static inline enum fy_input_state fy_input_get_state(struct fy_input *fyi)
 	return fyi->state;
 }
 
-struct fy_input *fy_parse_input_create(struct fy_parser *fyp, const struct fy_input_cfg *fyic);
+struct fy_input *fy_input_create(const struct fy_input_cfg *fyic);
 
 const char *fy_input_get_filename(struct fy_input *fyi);
 
@@ -231,12 +231,20 @@ const void *fy_parse_input_try_pull(struct fy_parser *fyp, struct fy_input *fyi,
 struct fy_reader;
 
 struct fy_reader_ops {
+	struct fy_diag *(*get_diag)(struct fy_reader *fyr);
 	int (*file_open)(struct fy_reader *fyr, const char *filename);
+};
+
+struct fy_reader_input_cfg {
+	bool disable_mmap_opt;
 };
 
 struct fy_reader {
 	const struct fy_reader_ops *ops;
+
+	struct fy_reader_input_cfg current_input_cfg;
 	struct fy_input *current_input;
+
 	size_t current_pos;		/* from start of stream */
 	size_t current_input_pos;	/* from start of input */
 	const void *current_ptr;	/* current pointer into the buffer */
@@ -250,8 +258,14 @@ struct fy_reader {
 	int nontab_column;		/* column without accounting for tabs */
 
 	struct fy_diag *diag;
-	unsigned int pflags;
 };
+
+void fy_reader_reset(struct fy_reader *fyr);
+void fy_reader_init(struct fy_reader *fyr, const struct fy_reader_ops *ops);
+void fy_reader_cleanup(struct fy_reader *fyr);
+
+int fy_reader_input_open(struct fy_reader *fyr, struct fy_input *fyi, const struct fy_reader_input_cfg *icfg);
+int fy_reader_input_done(struct fy_reader *fyr);
 
 const void *fy_reader_ptr_slow_path(struct fy_reader *fyr, size_t *leftp);
 const void *fy_reader_ensure_lookahead_slow_path(struct fy_reader *fyr, size_t size, size_t *leftp);
