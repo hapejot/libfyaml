@@ -7545,24 +7545,3 @@ int fy_walk_perform(struct fy_walk_ctx *wc, struct fy_walk_result_list *results,
 
 	return fy_walk_perform_internal(wc, results, fyn, fwc);
 }
-
-void fy_path_parser_init(struct fy_path_parser *fypp,
-			 struct fy_input *fyi, struct fy_mark *mark_start, struct fy_diag *diag)
-{
-	memset(fypp, 0, sizeof(*fypp));
-}
-
-void fy_path_parser_cleanup(struct fy_path_parser *fypp)
-{
-	/* */
-}
-
-struct fy_walk_ctx *
-fy_path_parse(struct fy_input *fyi, struct fy_mark *mark_start, struct fy_diag *diag)
-{
-	struct fy_path_parser fypp_v, *fypp = &fypp_v;
-
-	fy_path_parser_init(fypp, mark_start, diag);
-
-	fy_path_parser_cleanup(fypp);
-}
