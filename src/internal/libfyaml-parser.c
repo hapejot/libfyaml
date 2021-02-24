@@ -26,6 +26,7 @@
 #endif
 
 #include "fy-parse.h"
+#include "fy-walk.h"
 
 #include "fy-valgrind.h"
 
