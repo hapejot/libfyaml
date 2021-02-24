@@ -237,6 +237,7 @@ static inline struct fy_input *fy_token_get_input(struct fy_token *fyt)
 
 enum fy_atom_style fy_token_atom_style(struct fy_token *fyt);
 enum fy_scalar_style fy_token_scalar_style(struct fy_token *fyt);
+bool fy_token_atom_json_mode(struct fy_token *fyt);
 
 #define FYTTAF_HAS_LB			FY_BIT(0)
 #define FYTTAF_HAS_WS			FY_BIT(1)
@@ -257,8 +258,7 @@ enum fy_scalar_style fy_token_scalar_style(struct fy_token *fyt);
 
 int fy_token_text_analyze(struct fy_token *fyt);
 
-unsigned int fy_analyze_scalar_content(const struct fy_input *fyi,
-				       const char *data, size_t size);
+unsigned int fy_analyze_scalar_content(const char *data, size_t size, bool json_mode);
 
 const char *fy_tag_directive_token_prefix(struct fy_token *fyt, size_t *lenp);
 const char *fy_tag_directive_token_handle(struct fy_token *fyt, size_t *lenp);

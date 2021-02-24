@@ -28,6 +28,7 @@ struct fy_input;
 struct fy_node;
 
 enum fy_atom_style {
+	/* YAML atoms */
 	FYAS_PLAIN,
 	FYAS_SINGLE_QUOTED,
 	FYAS_DOUBLE_QUOTED,
@@ -62,7 +63,7 @@ struct fy_atom {
 	uint64_t fyi_generation;	/* to detect reallocs */
 	unsigned int increment;
 	/* save a little bit of space with bitfields */
-	enum fy_atom_style style : 6;
+	enum fy_atom_style style;
 	enum fy_atom_chomp chomp : 4;
 	bool direct_output : 1;		/* can directly output */
 	bool storage_hint_valid : 1;
@@ -76,6 +77,7 @@ struct fy_atom {
 	bool trailing_lb : 1;		/* atom ends with trailing linebreaks > 1 */ 
 	bool size0 : 1;			/* atom contains absolutely nothing */
 	bool valid_anchor : 1;		/* atom is a valid anchor */
+	bool json_mode : 1;		/* atom was read in json mode */
 	unsigned int tabsize : 4;
 };
 

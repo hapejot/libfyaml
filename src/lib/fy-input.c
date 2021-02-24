@@ -130,8 +130,10 @@ static void fy_input_from_data_setup(struct fy_input *fyi,
 	if (!handle)
 		goto out;
 
+	memset(handle, 0, sizeof(*handle));
+
 	if (size > 0)
-		aflags = fy_analyze_scalar_content(fyi, data, size);
+		aflags = fy_analyze_scalar_content(data, size, false);	/* hardcoded yaml mode */
 	else
 		aflags = FYACF_EMPTY | FYACF_FLOW_PLAIN | FYACF_BLOCK_PLAIN;
 
@@ -169,6 +171,7 @@ static void fy_input_from_data_setup(struct fy_input *fyi,
 	handle->fyi = fyi;
 	handle->fyi_generation = fyi->generation;
 	handle->tabsize = 0;
+	handle->json_mode = false;	/* XXX hardcoded */
 out:
 	fyi->state = FYIS_PARSED;
 }
@@ -297,6 +300,8 @@ void fy_reader_reset(struct fy_reader *fyr)
 
 	memset(fyr, 0, sizeof(*fyr));
 
+	/* by default we're always in yaml mode */
+	fyr->mode = fyrm_yaml;
 	fyr->ops = ops;
 	fyr->diag = diag;
 	fyr->current_c = -1;
@@ -317,7 +322,9 @@ void fy_reader_cleanup(struct fy_reader *fyr)
 {
 	if (!fyr)
 		return;
+
 	fy_input_unref(fyr->current_input);
+	fyr->current_input = NULL;
 	fy_reader_reset(fyr);
 }
 
@@ -463,7 +470,6 @@ int fy_reader_input_done(struct fy_reader *fyr)
 
 	fyi->state = FYIS_PARSED;
 	fy_input_unref(fyi);
-
 	fyr->current_input = NULL;
 
 	return 0;
@@ -791,3 +797,51 @@ const void *fy_reader_ensure_lookahead_slow_path(struct fy_reader *fyr, size_t s
 	}
 	return p;
 }
+
+void fy_reader_advance_octets(struct fy_reader *fyr, size_t advance)
+{
+	struct fy_input *fyi;
+	size_t left __FY_DEBUG_UNUSED__;
+
+	assert(fyr);
+	assert(fyr->current_input);
+
+	assert(fyr->current_left >= advance);
+
+	fyi = fyr->current_input;
+
+	switch (fyi->cfg.type) {
+	case fyit_file:
+		if (fyi->file.addr) {
+			left = fyi->file.length - fyr->current_input_pos;
+			break;
+		}
+		/* fall-through */
+
+	case fyit_stream:
+		left = fyi->read - fyr->current_input_pos;
+		break;
+
+	case fyit_memory:
+		left = fyi->cfg.memory.size - fyr->current_input_pos;
+		break;
+
+	case fyit_alloc:
+		left = fyi->cfg.alloc.size - fyr->current_input_pos;
+		break;
+
+	default:
+		assert(0);	/* no streams */
+		break;
+	}
+
+	assert(left >= advance);
+
+	fyr->current_input_pos += advance;
+	fyr->current_ptr += advance;
+	fyr->current_left -= advance;
+	fyr->current_pos += advance;
+
+	fyr->current_c = fy_utf8_get(fyr->current_ptr, fyr->current_left, &fyr->current_w);
+}
+

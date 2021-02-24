@@ -176,6 +176,48 @@ static inline bool fy_is_json_unescaped(int c)
 	return c >= 0x20 && c <= 0x110000 && c != '"' && c != '\\';
 }
 
+static inline bool fy_is_lb_yj(int c, bool json_mode)
+{
+	/* '\r', '\n' are always linebreaks */
+	if (fy_is_json_lb(c))
+		return true;
+	if (json_mode)
+		return false;
+	return fy_is_yaml12_lb(c);
+}
+
+static inline bool fy_is_lbz_yj(int c, bool json_mode)
+{
+	return fy_is_lb_yj(c, json_mode) || fy_is_z(c);
+}
+
+static inline bool fy_is_blankz_yj(int c, bool json_mode)
+{
+	return fy_is_ws(c) || fy_is_lbz_yj(c, json_mode);
+}
+
+static inline bool fy_is_flow_ws_yj(int c, bool json_mode)
+{
+	/* space is always allowed */
+	if (fy_is_space(c))
+		return true;
+	/* no other space for JSON */
+	if (json_mode)
+		return false;
+	/* YAML allows tab for WS */
+	return fy_is_tab(c);
+}
+
+static inline bool fy_is_flow_blank_yj(int c, bool json_mode)
+{
+	return fy_is_flow_ws_yj(c, json_mode);
+}
+
+static inline bool fy_is_flow_blankz_yj(int c, bool json_mode)
+{
+	return fy_is_flow_ws_yj(c, json_mode) || fy_is_lbz_yj(c, json_mode);
+}
+
 #define FY_CTYPE_AT_BUILDER(_kind) \
 static inline const void * \
 fy_find_ ## _kind (const void *s, size_t len) \

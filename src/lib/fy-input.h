@@ -85,7 +85,6 @@ struct fy_input {
 	size_t chunk;
 	FILE *fp;
 	int refs;
-	bool json_mode : 1;	/* the input is in JSON format */
 	union {
 		struct {
 			int fd;			/* fd for file and stream */
@@ -97,48 +96,6 @@ struct fy_input {
 	};
 };
 FY_TYPE_DECL_LIST(input);
-
-static inline bool fy_input_json_mode(const struct fy_input *fyi)
-{
-	return fyi && fyi->json_mode;
-}
-
-static inline bool fy_input_is_lb(const struct fy_input *fyi, int c)
-{
-	/* '\r', '\n' are always linebreaks */
-	if (fy_is_json_lb(c))
-		return true;
-	if (fyi && fyi->json_mode)
-		return false;
-	return fy_is_yaml12_lb(c);
-}
-
-static inline bool fy_input_is_lbz(const struct fy_input *fyi, int c)
-{
-	return fy_input_is_lb(fyi, c) || fy_is_z(c);
-}
-
-static inline bool fy_input_is_blankz(const struct fy_input *fyi, int c)
-{
-	return fy_is_ws(c) || fy_input_is_lbz(fyi, c);
-}
-
-static inline bool fy_input_is_flow_ws(const struct fy_input *fyi, int c)
-{
-	/* space is always allowed */
-	if (fy_is_space(c))
-		return true;
-	/* no other space for JSON */
-	if (fyi && fyi->json_mode)
-		return false;
-	/* YAML allows tab for WS */
-	return fy_is_tab(c);
-}
-
-static inline bool fy_input_is_flow_blankz(const struct fy_input *fyi, int c)
-{
-	return fy_input_is_flow_ws(fyi, c) || fy_input_is_lbz(fyi, c);
-}
 
 static inline const void *fy_input_start(const struct fy_input *fyi)
 {
@@ -225,6 +182,11 @@ void fy_input_close(struct fy_input *fyi);
 
 struct fy_reader;
 
+enum fy_reader_mode {
+	fyrm_yaml,
+	fyrm_json,
+};
+
 struct fy_reader_ops {
 	struct fy_diag *(*get_diag)(struct fy_reader *fyr);
 	int (*file_open)(struct fy_reader *fyr, const char *filename);
@@ -236,6 +198,7 @@ struct fy_reader_input_cfg {
 
 struct fy_reader {
 	const struct fy_reader_ops *ops;
+	enum fy_reader_mode mode;
 
 	struct fy_reader_input_cfg current_input_cfg;
 	struct fy_input *current_input;
@@ -265,6 +228,23 @@ int fy_reader_input_done(struct fy_reader *fyr);
 
 const void *fy_reader_ptr_slow_path(struct fy_reader *fyr, size_t *leftp);
 const void *fy_reader_ensure_lookahead_slow_path(struct fy_reader *fyr, size_t size, size_t *leftp);
+
+static inline enum fy_reader_mode
+fy_reader_get_mode(const struct fy_reader *fyr)
+{
+	if (!fyr)
+		return fyrm_yaml;
+	return fyr->mode;
+}
+
+static inline void
+fy_reader_set_mode(struct fy_reader *fyr, enum fy_reader_mode mode)
+{
+	if (!fyr)
+		return;
+
+	fyr->mode = mode;
+}
 
 static inline struct fy_input *
 fy_reader_current_input(const struct fy_reader *fyr)
@@ -341,46 +321,39 @@ fy_reader_ptr(struct fy_reader *fyr, size_t *leftp)
 	return fy_reader_ptr_slow_path(fyr, leftp);
 }
 
-/* XXX */
 static inline bool fy_reader_json_mode(const struct fy_reader *fyr)
 {
-	return fyr && fyr->current_input && fyr->current_input->json_mode;
+	return fyr && fyr->mode == fyrm_json;
 }
 
-static inline bool
-fy_reader_is_lb(const struct fy_reader *fyr, int c)
+static inline bool fy_reader_is_lb(const struct fy_reader *fyr, int c)
 {
-	return fyr && fy_input_is_lb(fyr->current_input, c);
+	return fy_is_lb_yj(c, fy_reader_json_mode(fyr));
 }
 
-static inline bool
-fy_reader_is_lbz(const struct fy_reader *fyr, int c)
+static inline bool fy_reader_is_lbz(const struct fy_reader *fyr, int c)
 {
-	return fyr && fy_input_is_lbz(fyr->current_input, c);
+	return fy_is_lbz_yj(c, fy_reader_json_mode(fyr));
 }
 
-static inline bool
-fy_reader_is_blankz(const struct fy_reader *fyr, int c)
+static inline bool fy_reader_is_blankz(const struct fy_reader *fyr, int c)
 {
-	return fyr && fy_input_is_blankz(fyr->current_input, c);
+	return fy_is_blankz_yj(c, fy_reader_json_mode(fyr));
 }
 
-static inline bool
-fy_reader_is_flow_ws(const struct fy_reader *fyr, int c)
+static inline bool fy_reader_is_flow_ws(const struct fy_reader *fyr, int c)
 {
-	return fyr && fy_input_is_flow_ws(fyr->current_input, c);
+	return fy_is_flow_ws_yj(c, fy_reader_json_mode(fyr));
 }
 
-static inline bool
-fy_reader_is_flow_blank(const struct fy_reader *fyr, int c)
+static inline bool fy_reader_is_flow_blank(const struct fy_reader *fyr, int c)
 {
-	return fy_reader_is_flow_ws(fyr, c);
+	return fy_is_flow_blank_yj(c, fy_reader_json_mode(fyr));
 }
 
-static inline bool
-fy_reader_is_flow_blankz(const struct fy_reader *fyr, int c)
+static inline bool fy_reader_is_flow_blankz(const struct fy_reader *fyr, int c)
 {
-	return fyr && fy_input_is_flow_blankz(fyr->current_input, c);
+	return fy_is_flow_blankz_yj(c, fy_reader_json_mode(fyr));
 }
 
 static inline const void *
@@ -395,53 +368,7 @@ fy_reader_ensure_lookahead(struct fy_reader *fyr, size_t size, size_t *leftp)
 }
 
 /* advance the given number of ascii characters, not utf8 */
-static inline void
-fy_reader_advance_octets(struct fy_reader *fyr, size_t advance)
-{
-	struct fy_input *fyi;
-	size_t left __FY_DEBUG_UNUSED__;
-
-	assert(fyr);
-	assert(fyr->current_input);
-
-	assert(fyr->current_left >= advance);
-
-	fyi = fyr->current_input;
-
-	switch (fyi->cfg.type) {
-	case fyit_file:
-		if (fyi->file.addr) {
-			left = fyi->file.length - fyr->current_input_pos;
-			break;
-		}
-		/* fall-through */
-
-	case fyit_stream:
-		left = fyi->read - fyr->current_input_pos;
-		break;
-
-	case fyit_memory:
-		left = fyi->cfg.memory.size - fyr->current_input_pos;
-		break;
-
-	case fyit_alloc:
-		left = fyi->cfg.alloc.size - fyr->current_input_pos;
-		break;
-
-	default:
-		assert(0);	/* no streams */
-		break;
-	}
-
-	assert(left >= advance);
-
-	fyr->current_input_pos += advance;
-	fyr->current_ptr += advance;
-	fyr->current_left -= advance;
-	fyr->current_pos += advance;
-
-	fyr->current_c = fy_utf8_get(fyr->current_ptr, fyr->current_left, &fyr->current_w);
-}
+void fy_reader_advance_octets(struct fy_reader *fyr, size_t advance);
 
 /* compare string at the current point (n max) */
 static inline int

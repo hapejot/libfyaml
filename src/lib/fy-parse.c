@@ -78,6 +78,7 @@ int fy_parse_get_next_input(struct fy_parser *fyp)
 	struct fy_reader_input_cfg icfg;
 	struct fy_input *fyi;
 	int rc;
+	bool json_mode;
 
 	assert(fyp);
 
@@ -95,20 +96,19 @@ int fy_parse_get_next_input(struct fy_parser *fyp)
 		return 0;
 	}
 
-	/* XXX hack should be a reader property */
+	json_mode = false;
 	if ((fyp->cfg.flags & (FYPCF_JSON_MASK << FYPCF_JSON_SHIFT)) == FYPCF_JSON_AUTO) {
 		/* detection only works for filenames (sucks) */
 		if (fyi->cfg.type == fyit_file) {
 			s = fyi->cfg.file.filename;
 			if (s)
 				s = strrchr(s, '.');
-			fyi->json_mode = s && !strcmp(s, ".json");
-		} else
-			fyi->json_mode = false;
+			json_mode = s && !strcmp(s, ".json");
+		}
 	} else if ((fyp->cfg.flags & (FYPCF_JSON_MASK << FYPCF_JSON_SHIFT)) == FYPCF_JSON_FORCE)
-		fyi->json_mode = true;
-	else
-		fyi->json_mode = false;
+		json_mode = true;
+
+	fy_reader_set_mode(&fyp->reader, !json_mode ? fyrm_yaml : fyrm_json);
 
 	memset(&icfg, 0, sizeof(icfg));
 	icfg.disable_mmap_opt = !!(fyp->cfg.flags & FYPCF_DISABLE_MMAP_OPT);
@@ -117,7 +117,10 @@ int fy_parse_get_next_input(struct fy_parser *fyp)
 	fyp_error_check(fyp, !rc, err_out,
 			"failed to open input");
 
-	fyp_scan_debug(fyp, "get next input: new input - %s mode", fyi->json_mode ? "JSON" : "YAML");
+	/* take off the reference; reader now owns */
+	fy_input_unref(fyi);
+
+	fyp_scan_debug(fyp, "get next input: new input - %s mode", json_mode ? "JSON" : "YAML");
 
 	return 1;
 
@@ -698,7 +701,6 @@ int fy_scan_comment(struct fy_parser *fyp, struct fy_atom *handle, bool single_l
 		handle->trailing_lb = false;
 		handle->size0 = lines > 0;
 		handle->valid_anchor = false;
-		handle->tabsize = fyp_tabsize(fyp);
 	}
 
 	return 0;
@@ -2839,6 +2841,7 @@ int fy_fetch_block_scalar(struct fy_parser *fyp, bool is_literal, int c)
 	handle.trailing_lb = trailing_lb;
 	handle.size0 = length == 0;
 	handle.valid_anchor = false;
+	handle.json_mode = fyp_json_mode(fyp);
 	handle.tabsize = fyp_tabsize(fyp);
 
 #ifdef ATOM_SIZE_CHECK
@@ -3483,6 +3486,7 @@ int fy_fetch_plain_scalar(struct fy_parser *fyp, int c)
 	handle.trailing_lb = false;
 	handle.size0 = length == 0;
 	handle.valid_anchor = false;
+	handle.json_mode = fyp_json_mode(fyp);
 	handle.tabsize = fyp_tabsize(fyp);
 
 #ifdef ATOM_SIZE_CHECK
@@ -4362,7 +4366,7 @@ static struct fy_eventp *fy_parse_internal(struct fy_parser *fyp)
 
 			/* empty content is not allowed in JSON mode */
 			FYP_TOKEN_ERROR_CHECK(fyp, fyt, FYEM_PARSE,
-					!fy_input_json_mode(fy_token_get_input(fyt)) ||
+					!fyp_json_mode(fyp) ||
 						fyp->stream_has_content, err_out,
 					"JSON does not allow empty root content");
 

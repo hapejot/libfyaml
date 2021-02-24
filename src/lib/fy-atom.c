@@ -52,6 +52,8 @@ void fy_fill_atom_end_at(struct fy_parser *fyp, struct fy_atom *handle,
 	/* by default we don't do storage hints, it's the job of the caller */
 	handle->storage_hint = 0;
 	handle->storage_hint_valid = false;
+	handle->tabsize = fyp_tabsize(fyp);
+	handle->json_mode = fyp_json_mode(fyp);
 }
 
 void fy_fill_atom_end(struct fy_parser *fyp, struct fy_atom *handle)
@@ -324,7 +326,7 @@ fy_atom_iter_line_analyze(struct fy_atom_iter *iter, struct fy_atom_iter_line_in
 			li->indented = fy_is_ws(c);
 		}
 
-		if (fy_input_is_lb(atom->fyi, c)) {
+		if (fy_is_lb_yj(c, atom->json_mode)) {
 			col = 0;
 			if (!li->end) {
 				li->end = ss;
@@ -406,7 +408,7 @@ fy_atom_iter_line_analyze(struct fy_atom_iter *iter, struct fy_atom_iter_line_in
 	/* if there's only one linebreak left, we don't have trailing breaks */
 	if (c >= 0) {
 		ss += w;
-		if (fy_input_is_lb(atom->fyi, c))
+		if (fy_is_lb_yj(c, atom->json_mode))
 			col = 0;
 		else if (fy_is_tab(c))
 			col += (ts - (col % ts));
@@ -422,13 +424,13 @@ fy_atom_iter_line_analyze(struct fy_atom_iter *iter, struct fy_atom_iter_line_in
 	/* find out if any trailing breaks exist afterwards */
 	for (; (c = fy_utf8_get(ss, (e - ss), &w)) >= 0 && fy_is_ws_lb(c); ss += w) {
 
-		if (!li->trailing_breaks && fy_input_is_lb(atom->fyi, c))
+		if (!li->trailing_breaks && fy_is_lb_yj(c, atom->json_mode))
 			li->trailing_breaks = true;
 
 		if (!li->trailing_breaks_ws && is_block && (unsigned int)col > iter->chomp)
 			li->trailing_breaks_ws = true;
 
-		if (fy_input_is_lb(atom->fyi, c))
+		if (fy_is_lb_yj(c, atom->json_mode))
 			col = 0;
 		else {
 			/* indented whitespace counts as break */
@@ -685,7 +687,7 @@ fy_atom_iter_format(struct fy_atom_iter *iter)
 				break;
 
 			ret = fy_utf8_parse_escape(&t, e - t,
-					!fy_input_json_mode(atom->fyi) ?
+					!atom->json_mode ?
 					fyue_doublequote : fyue_doublequote_json);
 			if (ret < 0)
 				goto out;
@@ -1457,7 +1459,7 @@ fy_atom_raw_line_iter_next(struct fy_atom_raw_line_iter *iter)
 
 	while (s > iter->is) {
 		c = fy_utf8_get_right(iter->is, (int)(s - iter->is), &w);
-		if (c <= 0 || fy_input_is_lb(iter->atom->fyi, c))
+		if (c <= 0 || fy_is_lb_yj(c, iter->atom->json_mode))
 			break;
 		s -= w;
 	}
@@ -1480,7 +1482,7 @@ fy_atom_raw_line_iter_next(struct fy_atom_raw_line_iter *iter)
 				col += (ts - (col % ts));
 			else
 				col++;
-		} else if (!fy_input_is_lb(iter->atom->fyi, c)) {
+		} else if (!fy_is_lb_yj(c, iter->atom->json_mode)) {
 			col++;
 			col8++;
 		} else
@@ -1507,7 +1509,7 @@ fy_atom_raw_line_iter_next(struct fy_atom_raw_line_iter *iter)
 				col += (ts - (col % ts));
 			else
 				col++;
-		} else if (!fy_input_is_lb(iter->atom->fyi, c)) {
+		} else if (!fy_is_lb_yj(c, iter->atom->json_mode)) {
 			col++;
 			col8++;
 		} else
@@ -1536,7 +1538,7 @@ fy_atom_raw_line_iter_next(struct fy_atom_raw_line_iter *iter)
 					col += (ts - (col % ts));
 				else
 					col++;
-			} else if (!fy_input_is_lb(iter->atom->fyi, c)) {
+			} else if (!fy_is_lb_yj(c, iter->atom->json_mode)) {
 				col++;
 				col8++;
 			} else
@@ -1550,7 +1552,7 @@ fy_atom_raw_line_iter_next(struct fy_atom_raw_line_iter *iter)
 	l->line_len = (size_t)(s - l->line_start);
 	l->line_count = count;
 
-	if (fy_input_is_lb(iter->atom->fyi, c)) {
+	if (fy_is_lb_yj(c, iter->atom->json_mode)) {
 		s += w;
 		/* special case for MSDOS */
 		if (c == '\r' && (s < iter->ie && s[1] == '\n'))
