@@ -229,7 +229,7 @@ void fy_reader_diag_report(struct fy_reader *fyr,
 #define FYP_MARK_DIAG(_fyp, _sm, _em, _type, _module, _fmt, ...) \
 	_FYP_TOKEN_DIAG(_fyp, \
 		fy_token_create(FYTT_INPUT_MARKER, \
-			fy_fill_atom_mark(fyp_current_input((_fyp)), (_sm), (_em), \
+			fy_fill_atom_mark(((_fyp)), (_sm), (_em), \
 				alloca(sizeof(struct fy_atom)))), \
 		_type, _module, _fmt, ## __VA_ARGS__)
 

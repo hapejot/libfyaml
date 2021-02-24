@@ -420,6 +420,59 @@ fy_parse_strcmp(struct fy_parser *fyp, const char *str)
 	return fy_reader_strcmp(&fyp->reader, str);
 }
 
+static inline void
+fy_fill_atom_start(struct fy_parser *fyp, struct fy_atom *handle)
+{
+	if (!fyp)
+		return;
+	fy_reader_fill_atom_start(&fyp->reader, handle);
+}
+
+static inline void
+fy_fill_atom_end_at(struct fy_parser *fyp, struct fy_atom *handle, struct fy_mark *end_mark)
+{
+	if (!fyp)
+		return;
+	fy_reader_fill_atom_end_at(&fyp->reader, handle, end_mark);
+}
+
+static inline void
+fy_fill_atom_end(struct fy_parser *fyp, struct fy_atom *handle)
+{
+	if (!fyp)
+		return;
+	fy_reader_fill_atom_end(&fyp->reader, handle);
+}
+
+static inline struct fy_atom *
+fy_fill_atom(struct fy_parser *fyp, int advance, struct fy_atom *handle)
+{
+	if (!fyp)
+		return NULL;
+	return fy_reader_fill_atom(&fyp->reader, advance, handle);
+}
+
+static inline struct fy_atom *
+fy_fill_atom_mark(struct fy_parser *fyp, const struct fy_mark *start_mark,
+		  const struct fy_mark *end_mark, struct fy_atom *handle)
+{
+	if (!fyp)
+		return NULL;
+	return fy_reader_fill_atom_mark(&fyp->reader, start_mark, end_mark, handle);
+}
+
+static inline struct fy_atom *
+fy_fill_atom_at(struct fy_parser *fyp, int advance, int count, struct fy_atom *handle)
+{
+	if (!fyp)
+		return NULL;
+	return fy_reader_fill_atom_at(&fyp->reader, advance, count, handle);
+}
+
+#define fy_fill_atom_a(_fyp, _advance) \
+	fy_fill_atom((_fyp), (_advance), alloca(sizeof(struct fy_atom)))
+
+
 int fy_parse_setup(struct fy_parser *fyp, const struct fy_parse_cfg *cfg);
 void fy_parse_cleanup(struct fy_parser *fyp);
 
