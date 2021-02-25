@@ -364,66 +364,6 @@ struct fy_token *fy_token_create(enum fy_token_type type, ...)
 	return fyt;
 }
 
-static struct fy_token *
-fy_token_vqueue_internal(struct fy_parser *fyp, struct fy_token_list *fytl,
-			 enum fy_token_type type, va_list ap)
-{
-	struct fy_token *fyt;
-
-	fyt = fy_token_vcreate(type, ap);
-	if (!fyt)
-		return NULL;
-	fy_token_list_add_tail(fytl, fyt);
-
-	/* special handling for zero indented scalars */
-	if (fyt->type == FYTT_DOCUMENT_START) {
-		fyp->document_first_content_token = true;
-		fyp_scan_debug(fyp, "document_first_content_token set to true");
-	} else if (fyp->document_first_content_token &&
-			fy_token_type_is_content(fyt->type)) {
-		fyp->document_first_content_token = false;
-		fyp_scan_debug(fyp, "document_first_content_token set to false");
-	}
-
-	fyp_debug_dump_token_list(fyp, fytl, fyt, "queued: ");
-	return fyt;
-}
-
-struct fy_token *fy_token_queue_internal(struct fy_parser *fyp, struct fy_token_list *fytl,
-					 enum fy_token_type type, ...)
-{
-	va_list ap;
-	struct fy_token *fyt;
-
-	va_start(ap, type);
-	fyt = fy_token_vqueue_internal(fyp, fytl, type, ap);
-	va_end(ap);
-
-	return fyt;
-}
-
-struct fy_token *fy_token_vqueue(struct fy_parser *fyp, enum fy_token_type type, va_list ap)
-{
-	struct fy_token *fyt;
-
-	fyt = fy_token_vqueue_internal(fyp, &fyp->queued_tokens, type, ap);
-	if (fyt)
-		fyp->token_activity_counter++;
-	return fyt;
-}
-
-struct fy_token *fy_token_queue(struct fy_parser *fyp, enum fy_token_type type, ...)
-{
-	va_list ap;
-	struct fy_token *fyt;
-
-	va_start(ap, type);
-	fyt = fy_token_vqueue(fyp, type, ap);
-	va_end(ap);
-
-	return fyt;
-}
-
 int fy_token_format_text_length(struct fy_token *fyt)
 {
 	int length;

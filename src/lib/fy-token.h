@@ -21,10 +21,6 @@
 
 #include "fy-atom.h"
 
-struct fy_parser;
-struct fy_token;
-struct fy_document;
-
 enum fy_token_type {
 	/* non-content token types */
 	FYTT_NONE,
@@ -135,12 +131,7 @@ const char *fy_tag_token_format_text(const struct fy_token *fyt, char *buf, size
 int fy_token_format_utf8_length(struct fy_token *fyt);
 
 struct fy_token *fy_token_create(enum fy_token_type type, ...);
-
-struct fy_token *fy_token_vqueue(struct fy_parser *fyp, enum fy_token_type type, va_list ap);
-struct fy_token *fy_token_queue(struct fy_parser *fyp, enum fy_token_type type, ...);
-
-struct fy_token *fy_token_queue_internal(struct fy_parser *fyp, struct fy_token_list *fytl,
-					 enum fy_token_type type, ...);
+struct fy_token *fy_token_vcreate(enum fy_token_type type, va_list ap);
 
 int fy_token_format_text_length(struct fy_token *fyt);
 const char *fy_token_format_text(struct fy_token *fyt, char *buf, size_t maxsz);

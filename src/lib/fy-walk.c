@@ -1305,3 +1305,225 @@ int fy_walk_perform(struct fy_walk_ctx *wc, struct fy_walk_result_list *results,
 
 	return fy_walk_perform_internal(wc, results, fyn, fwc);
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////
+
+#if 0
+
+struct fy_path_expr *fy_path_expr_alloc(void)
+{
+	struct fy_path_expr *fpe = NULL;
+
+	fpe = malloc(sizeof(*fpe));
+	if (!fpe)
+		return NULL;
+	memset(fpe, 0, sizeof(*fpe));
+	fy_path_expr_list_init(&fpe->children);
+
+	return fpe;
+}
+
+void fy_path_expr_free(struct fy_path_expr *fpe)
+{
+	struct fy_path_expr *fpen;
+
+	if (!fpe)
+		return;
+
+	while ((fpen = fy_path_expr_list_pop(&fpe->children)) != NULL)
+		fy_path_expr_free(fpen);
+
+	free(fpe);
+}
+
+const char *path_expr_type_txt[] = {
+	/* */
+	[fpet_root]			= "root",
+	[fpet_this]			= "this",
+	[fpet_parent]			= "parent",
+	[fpet_every_child]		= "every-child",
+	[fpet_every_child_r]		= "every-child-recursive",
+	[fpet_every_leaf]		= "every-leaf",
+	[fpet_assert_collection]	= "assert-collection",
+	[fpet_assert_scalar]		= "assert-scalar",
+	[fpet_assert_sequence]		= "assert-sequence",
+	[fpet_assert_mapping]		= "assert-mapping",
+	[fpet_simple_map_key]		= "simple-map-key",
+	[fpet_seq_index]		= "seq-index",
+	[fpet_seq_slice]		= "seq-slice",
+
+	[fpet_map_key]			= "map-key",
+
+	[fpet_multi]			= "multi",
+	[fpet_chain]			= "chain",
+};
+
+struct fy_path_expr *
+fy_path_expr_create(struct fy_path_parser *fypp, struct fy_path_expr *parent, enum fy_path_expr_type type,
+		    const struct fy_atom *handle, ...)
+{
+	struct fy_diag *diag;
+	struct fy_path_expr_list *list;
+	struct fy_path_expr *fpe = NULL;
+	const char *s, *e;
+	char *buf, *end_idx;
+	va_list ap;
+
+	if (!fypp || !fy_path_expr_type_is_valid(type))
+		return NULL;
+
+	diag = fypp->diag;
+
+	fpe = fy_path_expr_alloc();
+	if (!fpe) {
+		fy_error(diag, "%s: fy_path_expr_alloc() failed\n", __func__);
+		goto err_out;
+	}
+	fpe->parent = parent;
+	fpe->type = type;
+	fpe->handle = *handle;
+
+	va_start(ap, handle);
+#if 0
+	switch (type) {
+	case fpet_start_alias:
+		assert(len > 1);
+		fpe->alias.alias = start + 1;
+		fpe->alias.aliaslen = len - 1;
+		break;
+
+	case fpet_map_key:
+		fpe->map_key.fyd = fy_document_build_from_string(NULL, start, len);
+		if (!fpe->map_key.fyd) {
+			fy_error(diag, "%s: fy_document_build_from_string() failed\n", __func__);
+			goto err_out;
+		}
+		break;
+	case fpet_seq_index:
+		buf = alloca(len + 1);
+		memcpy(buf, start, len);
+		buf[len] = '\0';
+		fpe->seq_index.index = (int)strtol(buf, &end_idx, 10);
+		/* everything must be consumed */
+		if (*end_idx != '\0') {
+			fy_error(diag, "%s: garbage after numeric\n", __func__);
+			goto err_out;
+		}
+		break;
+
+	case fpet_seq_slice:
+		buf = alloca(len + 1);
+		memcpy(buf, start, len);
+		buf[len] = '\0';
+		fpe->seq_slice.start_index = (int)strtol(buf, &end_idx, 10);
+		/* everything must be consumed */
+		if (*end_idx != ':') {
+			fy_error(diag, "%s: garbage after first slice index\n", __func__);
+			goto err_out;
+		}
+		if (fpe->seq_slice.start_index < 0) {
+			fy_error(diag, "%s: bad sequence slice start index\n", __func__);
+			goto err_out;
+		}
+		end_idx++;
+		if (*end_idx != '\0') {
+			fpe->seq_slice.end_index = (int)strtol(end_idx, &end_idx, 10);
+			if (*end_idx != '\0') {
+				fy_error(diag, "%s: garbage after second slice index\n", __func__);
+				goto err_out;
+			}
+			if (fpe->seq_slice.end_index < 0 || fpe->seq_slice.start_index >= fpe->seq_slice.end_index) {
+				fy_error(diag, "%s: bad end sequence slice end index\n", __func__);
+				goto err_out;
+			}
+		} else {
+			fpe->seq_slice.end_index = -1;
+		}
+		break;
+
+	default:
+		/* nothing extra for those */
+		break;
+	}
+#endif
+	va_end(ap);
+
+	return fpe;
+
+err_out:
+	fy_path_expr_free(fpe);
+	return NULL;
+}
+
+static struct fy_diag *fy_path_parser_reader_get_diag(struct fy_reader *fyr)
+{
+	struct fy_path_parser *fypp = container_of(fyr, struct fy_path_parser, reader);
+	return fypp->diag;
+}
+
+static const struct fy_reader_ops fy_path_parser_reader_ops = {
+	.get_diag = fy_path_parser_reader_get_diag,
+};
+
+void fy_path_parser_setup(struct fy_path_parser *fypp, struct fy_diag *diag)
+{
+	if (!fypp)
+		return;
+
+	memset(fypp, 0, sizeof(*fypp));
+	fypp->diag = diag;
+	fy_reader_setup(&fypp->reader, &fy_path_parser_reader_ops);
+}
+
+void fy_path_parser_cleanup(struct fy_path_parser *fypp)
+{
+	if (!fypp)
+		return;
+	fy_reader_cleanup(&fypp->reader);
+	fy_path_expr_free(fypp->root);
+	fypp->root = NULL;
+}
+
+int fy_path_parser_open(struct fy_path_parser *fypp, 
+			 struct fy_input *fyi, const struct fy_reader_input_cfg *icfg)
+{
+	if (!fypp)
+		return -1;
+
+	return fy_reader_input_open(&fypp->reader, fyi, icfg);
+}
+
+void fy_path_parser_close(struct fy_path_parser *fypp)
+{
+	if (!fypp)
+		return;
+
+	fy_reader_input_done(&fypp->reader);
+}
+
+struct fy_path_expr *
+fy_path_parser_parse(struct fy_path_parser *fypp, struct fy_path_expr *parent)
+{
+	struct fy_atom handle;
+	struct fy_reader *fyr;
+	int c;
+
+	if (!fypp)
+		return NULL;
+
+	fyr = &fypp->reader;
+
+	fy_reader_fill_atom_start(fyr, &handle);
+
+	while (!fy_is_z(c = fy_reader_peek(fyr))) { 
+		if (c == '/') {
+			/* root */
+			fy_reader_advance(fyr, c);
+			fy_reader_fill_atom_end(fyr, &handle);
+			return fy_path_expr_create(fypp, parent, fpet_root, &handle);
+		}
+	}
+
+	return NULL;
+}
+#endif

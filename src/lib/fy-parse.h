@@ -472,6 +472,15 @@ fy_fill_atom_at(struct fy_parser *fyp, int advance, int count, struct fy_atom *h
 #define fy_fill_atom_a(_fyp, _advance) \
 	fy_fill_atom((_fyp), (_advance), alloca(sizeof(struct fy_atom)))
 
+struct fy_token *fy_token_vqueue(struct fy_parser *fyp, enum fy_token_type type, va_list ap);
+struct fy_token *fy_token_queue(struct fy_parser *fyp, enum fy_token_type type, ...);
+
+struct fy_token *
+fy_token_vqueue_internal(struct fy_parser *fyp, struct fy_token_list *fytl,
+			 enum fy_token_type type, va_list ap);
+struct fy_token *
+fy_token_queue_internal(struct fy_parser *fyp, struct fy_token_list *fytl,
+			enum fy_token_type type, ...);
 
 int fy_parse_setup(struct fy_parser *fyp, const struct fy_parse_cfg *cfg);
 void fy_parse_cleanup(struct fy_parser *fyp);

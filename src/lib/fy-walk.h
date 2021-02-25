@@ -130,7 +130,6 @@ struct fy_walk_ctx {
 	char *path;	/* work area */
 	size_t pathlen;
 	struct fy_walk_component_list components;
-	struct fy_walk_component *root;
 };
 
 struct fy_walk_ctx *fy_walk_create(const char *path, size_t len, struct fy_diag *diag);
@@ -142,32 +141,57 @@ int fy_walk_perform(struct fy_walk_ctx *wc, struct fy_walk_result_list *results,
 void fy_walk_result_free(struct fy_walk_result *fwr);
 void fy_walk_result_list_free(struct fy_walk_result_list *results);
 
-struct fy_path_parse_cfg {
-	int dummy;
+/*********************/
+
+enum fy_path_expr_type {
+	/* ypath */
+	fpet_root,		/* /^ or / at the beginning of the expr */
+	fpet_this,		/* /. */
+	fpet_parent,		/* /.. */
+	fpet_every_child,	// /* every immediate child
+	fpet_every_child_r,	// /** every recursive child
+	fpet_every_leaf,	// /**$ every leaf node
+	fpet_assert_collection,	/* match only collection (at the end only) */
+	fpet_assert_scalar,	/* match only scalars (leaves) */
+	fpet_assert_sequence,	/* match only sequences */
+	fpet_assert_mapping,	/* match only sequences */
+	fpet_simple_map_key,
+	fpet_seq_index,
+	fpet_map_key,		/* complex map key (quoted, flow seq or map) */
+	fpet_seq_slice,
+
+	fpet_multi,
+	fpet_chain,
 };
 
-enum fy_path_parser_state {
-	/* none */
-	FYPPS_NONE,
-	FYPPS_START,
-	FYPPS_SEPARATOR,
-	FYPPS_EXPRESSION,
-	FYPPS_PREFIX,
-	FYPPS_SUFFIX,
+extern const char *path_expr_type_txt[];
+
+static inline bool fy_path_expr_type_is_valid(enum fy_path_expr_type type)
+{
+	return type >= fpet_root && type <= fpet_chain;
+}
+
+FY_TYPE_FWD_DECL_LIST(path_expr);
+struct fy_path_expr {
+	struct list_head node;
+	struct fy_path_expr *parent;
+	struct fy_path_expr_list children;
+	struct fy_atom handle;
 };
+FY_TYPE_DECL_LIST(path_expr);
 
 struct fy_path_parser {
-	struct fy_path_parse_cfg cfg;
-	struct fy_input *fyi;
-	struct fy_mark start_mark;
-	size_t current_input_pos;	/* from start of input */
-	const void *current_ptr;
-	int current_c;			/* current utf8 character at current_ptr (-1 if not cached) */
-	int current_w;			/* current utf8 character width */
-	size_t current_left;		/* currently left characters into the buffer */
-	int line;			/* always on input */
-	int column;
 	struct fy_diag *diag;
+	struct fy_reader reader;
+	struct fy_path_expr *root;
 };
+
+void fy_path_parser_setup(struct fy_path_parser *fypp, struct fy_diag *diag);
+void fy_path_parser_cleanup(struct fy_path_parser *fypp);
+
+struct fy_path_expr *
+fy_path_parser_parse(struct fy_path_parser *fypp, struct fy_path_expr *parent);
+
+int fy_path_expr_eval(struct fy_path_expr *expr, struct fy_walk_result_list *results, struct fy_node *fyn);
 
 #endif

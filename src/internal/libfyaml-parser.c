@@ -2674,6 +2674,75 @@ int do_reader(struct fy_parser *fyp, int indent, int width, bool resolve, bool s
 	return 0;
 }
 
+int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart, int indent, int width, bool resolve, bool sort)
+{
+	struct fy_walk_ctx *wc;
+	struct fy_walk_result_list results;
+	struct fy_walk_result *fwr;
+	struct fy_document *fyd;
+	struct fy_node *fyn;
+	unsigned int flags;
+	int rc, count;
+	char *path;
+
+	flags = 0;
+	if (sort)
+		flags |= FYECF_SORT_KEYS;
+	flags |= FYECF_INDENT(indent) | FYECF_WIDTH(width);
+
+	fy_notice(fyp->diag, "creating walk for \"%s\"\n", walkpath);
+
+	wc = fy_walk_create(walkpath, (size_t)-1, fyp->diag);
+	if (!wc) {
+		fy_error(fyp->diag, "failed to create walk for \"%s\"\n", walkpath);
+		return -1;
+	}
+
+	walk_dump(fyp->diag, wc);
+
+	count = 0;
+	while ((fyd = fy_parse_load_document(fyp)) != NULL) {
+
+		if (resolve) {
+			rc = fy_document_resolve(fyd);
+			if (rc)
+				return -1;
+		}
+
+		fyn = fy_node_by_path(fy_document_root(fyd), walkstart, FY_NT, FYNWF_DONT_FOLLOW);
+		if (!fyn) {
+			printf("could not find walkstart node %s\n", walkstart);
+			continue;
+		}
+
+		fy_walk_result_list_init(&results);
+
+		fy_walk_perform(wc, &results, fyn);
+
+		fy_emit_document_to_file(fyd, flags, NULL);
+
+		printf("\n");
+		while ((fwr = fy_walk_result_list_pop(&results)) != NULL) {
+
+			path = fy_node_get_path(fwr->fyn);
+			assert(path);
+
+			printf("> %s\n", path);
+			free(path);
+
+			fy_walk_result_free(fwr);
+		}
+
+		fy_parse_document_destroy(fyp, fyd);
+
+		count++;
+	}
+
+	fy_walk_destroy(wc);
+
+	return count > 0 ? 0 : -1;
+}
+
 
 static int modify_module_flags(const char *what, unsigned int *flagsp)
 {
@@ -2941,7 +3010,8 @@ int main(int argc, char *argv[])
 	    strcmp(mode, "dump") &&
 	    strcmp(mode, "build") &&
 	    strcmp(mode, "walk") &&
-	    strcmp(mode, "reader")
+	    strcmp(mode, "reader") &&
+	    strcmp(mode, "walk2")
 #if defined(HAVE_LIBYAML) && HAVE_LIBYAML
 	    && strcmp(mode, "libyaml-scan")
 	    && strcmp(mode, "libyaml-parse")
@@ -3117,6 +3187,12 @@ int main(int argc, char *argv[])
 		rc = do_reader(fyp, indent, width, resolve, sort);
 		if (rc < 0) {
 			/* fprintf(stderr, "do_reader() error %d\n", rc); */
+			goto cleanup;
+		}
+	} else if (!strcmp(mode, "walk2")) {
+		rc = do_walk2(fyp, walkpath, walkstart, indent, width, resolve, sort);
+		if (rc < 0) {
+			/* fprintf(stderr, "do_walk2() error %d\n", rc); */
 			goto cleanup;
 		}
 	}
