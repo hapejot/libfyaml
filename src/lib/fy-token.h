@@ -21,6 +21,8 @@
 
 #include "fy-atom.h"
 
+struct fy_document;
+
 enum fy_token_type {
 	/* non-content token types */
 	FYTT_NONE,
@@ -48,6 +50,22 @@ enum fy_token_type {
 	FYTT_SCALAR,
 	/* special error reporting */
 	FYTT_INPUT_MARKER,
+
+	/* path expression tokens */
+	FYTT_PE_SLASH,
+	FYTT_PE_ROOT,
+	FYTT_PE_THIS,
+	FYTT_PE_PARENT,
+	FYTT_PE_MAP_KEY,
+	FYTT_PE_SEQ_INDEX,
+	FYTT_PE_SEQ_SLICE,
+	FYTT_PE_SCALAR_FILTER,
+	FYTT_PE_COLLECTION_FILTER,
+	FYTT_PE_SEQ_FILTER,
+	FYTT_PE_MAP_FILTER,
+	FYTT_PE_EVERY_CHILD,
+	FYTT_PE_EVERY_CHILD_R,
+	FYTT_PE_ALIAS,
 };
 
 static inline bool fy_token_type_is_content(enum fy_token_type type)
@@ -109,6 +127,10 @@ struct fy_token {
 			unsigned int suffix_length;
 			struct fy_token *fyt_td;
 		} tag;
+		/* path expressions */
+		struct {
+			struct fy_document *fyd;	/* when key is complex */
+		} map_key;
 	};
 };
 FY_TYPE_DECL_LIST(token);
@@ -126,12 +148,37 @@ struct fy_token *fy_token_ref(struct fy_token *fyt);
 void fy_token_unref(struct fy_token *fyt);
 void fy_token_list_unref_all(struct fy_token_list *fytl);
 
+struct fy_token *fy_token_create(enum fy_token_type type, ...);
+struct fy_token *fy_token_vcreate(enum fy_token_type type, va_list ap);
+
+static inline struct fy_token *
+fy_token_list_vqueue(struct fy_token_list *fytl, enum fy_token_type type, va_list ap)
+{
+	struct fy_token *fyt;
+
+	fyt = fy_token_vcreate(type, ap);
+	if (!fyt)
+		return NULL;
+	fy_token_list_add_tail(fytl, fyt);
+	return fyt;
+}
+
+static inline struct fy_token *
+fy_token_list_queue(struct fy_token_list *fytl, enum fy_token_type type, ...)
+{
+	va_list ap;
+	struct fy_token *fyt;
+
+	va_start(ap, type);
+	fyt = fy_token_list_vqueue(fytl, type, ap);
+	va_end(ap);
+
+	return fyt;
+}
+
 int fy_tag_token_format_text_length(const struct fy_token *fyt);
 const char *fy_tag_token_format_text(const struct fy_token *fyt, char *buf, size_t maxsz);
 int fy_token_format_utf8_length(struct fy_token *fyt);
-
-struct fy_token *fy_token_create(enum fy_token_type type, ...);
-struct fy_token *fy_token_vcreate(enum fy_token_type type, va_list ap);
 
 int fy_token_format_text_length(struct fy_token *fyt);
 const char *fy_token_format_text(struct fy_token *fyt, char *buf, size_t maxsz);

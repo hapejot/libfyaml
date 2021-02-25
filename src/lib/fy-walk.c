@@ -1308,8 +1308,6 @@ int fy_walk_perform(struct fy_walk_ctx *wc, struct fy_walk_result_list *results,
 
 ////////////////////////////////////////////////////////////////////////////////////////////
 
-#if 0
-
 struct fy_path_expr *fy_path_expr_alloc(void)
 {
 	struct fy_path_expr *fpe = NULL;
@@ -1358,6 +1356,7 @@ const char *path_expr_type_txt[] = {
 	[fpet_chain]			= "chain",
 };
 
+#if 0
 struct fy_path_expr *
 fy_path_expr_create(struct fy_path_parser *fypp, struct fy_path_expr *parent, enum fy_path_expr_type type,
 		    const struct fy_atom *handle, ...)
@@ -1454,6 +1453,7 @@ err_out:
 	fy_path_expr_free(fpe);
 	return NULL;
 }
+#endif
 
 static struct fy_diag *fy_path_parser_reader_get_diag(struct fy_reader *fyr)
 {
@@ -1473,6 +1473,7 @@ void fy_path_parser_setup(struct fy_path_parser *fypp, struct fy_diag *diag)
 	memset(fypp, 0, sizeof(*fypp));
 	fypp->diag = diag;
 	fy_reader_setup(&fypp->reader, &fy_path_parser_reader_ops);
+	fy_token_list_init(&fypp->queued_tokens);
 }
 
 void fy_path_parser_cleanup(struct fy_path_parser *fypp)
@@ -1485,7 +1486,7 @@ void fy_path_parser_cleanup(struct fy_path_parser *fypp)
 }
 
 int fy_path_parser_open(struct fy_path_parser *fypp, 
-			 struct fy_input *fyi, const struct fy_reader_input_cfg *icfg)
+			struct fy_input *fyi, const struct fy_reader_input_cfg *icfg)
 {
 	if (!fypp)
 		return -1;
@@ -1501,6 +1502,7 @@ void fy_path_parser_close(struct fy_path_parser *fypp)
 	fy_reader_input_done(&fypp->reader);
 }
 
+#if 0
 struct fy_path_expr *
 fy_path_parser_parse(struct fy_path_parser *fypp, struct fy_path_expr *parent)
 {
@@ -1527,3 +1529,288 @@ fy_path_parser_parse(struct fy_path_parser *fypp, struct fy_path_expr *parent)
 	return NULL;
 }
 #endif
+
+struct fy_token *fy_path_token_vqueue(struct fy_path_parser *fypp, enum fy_token_type type, va_list ap)
+{
+	struct fy_token *fyt;
+
+	fyt = fy_token_list_vqueue(&fypp->queued_tokens, type, ap);
+	if (fyt)
+		fypp->token_activity_counter++;
+	return fyt;
+}
+
+struct fy_token *fy_path_token_queue(struct fy_path_parser *fypp, enum fy_token_type type, ...)
+{
+	va_list ap;
+	struct fy_token *fyt;
+
+	va_start(ap, type);
+	fyt = fy_path_token_vqueue(fypp, type, ap);
+	va_end(ap);
+
+	return fyt;
+}
+
+int fy_path_fetch_simple_map_key(struct fy_path_parser *fypp, int c)
+{
+	struct fy_reader *fyr;
+	struct fy_token *fyt;
+	int i;
+
+	fyr = &fypp->reader;
+
+	/* verify that the called context is correct */
+	assert(fy_is_first_alpha(c));
+	i = 1;
+	while (fy_is_alnum(fy_reader_peek_at(fyr, i)))
+		i++;
+
+	/* document is NULL, is a simple key */
+	fyt = fy_path_token_queue(fypp, FYTT_PE_MAP_KEY, fy_reader_fill_atom_a(fyr, i), NULL);
+	fyr_error_check(fyr, fyt, err_out, "fy_path_token_queue() failed\n");
+
+	return 0;
+
+err_out:
+	fypp->stream_error = true;
+	return -1;
+}
+
+int fy_path_fetch_quoted_scalar_map_key(struct fy_path_parser *fypp, int c)
+{
+	struct fy_atom handle;
+	struct fy_reader *fyr;
+	struct fy_token *fyt;
+	int rc;
+
+	fyr = &fypp->reader;
+
+	/* verify that the called context is correct */
+	assert(c == '"' || c == '\'');
+
+	rc = fy_reader_fetch_flow_scalar_handle(fyr, c, 0, &handle);
+	fyr_error_check(fyr, !rc, err_out, "fy_reader_fetch_flow_scalar_handle() failed\n");
+
+	/* document is NULL, is a simple key */
+	fyt = fy_path_token_queue(fypp, FYTT_PE_MAP_KEY, &handle, NULL);
+	fyr_error_check(fyr, fyt, err_out, "fy_path_token_queue() failed\n");
+
+	return 0;
+
+err_out:
+	fypp->stream_error = true;
+	return -1;
+}
+
+
+int fy_path_fetch_tokens(struct fy_path_parser *fypp)
+{
+	enum fy_token_type type;
+	struct fy_token *fyt;
+	struct fy_reader *fyr;
+	int c, rc, simple_token_count;
+
+	fyr = &fypp->reader;
+	if (!fypp->stream_start_produced) {
+
+		fyt = fy_path_token_queue(fypp, FYTT_STREAM_START, fy_reader_fill_atom_a(fyr, 0));
+		fyr_error_check(fyr, fyt, err_out, "fy_path_token_queue() failed\n");
+
+		fypp->stream_start_produced = true;
+		return 0;
+	}
+
+	/* XXX scan to next token? */
+
+	c = fy_reader_peek(fyr);
+
+	if (c > 0)
+		fy_notice(fypp->diag, "peek '%c'\n", c);
+	else
+		fy_notice(fypp->diag, "peek EOF\n");
+
+	if (fy_is_z(c)) {
+
+		if (c >= 0)
+			fy_reader_advance(fyr, c);
+
+		/* produce stream end continuously */
+		fyt = fy_path_token_queue(fypp, FYTT_STREAM_END, fy_reader_fill_atom_a(fyr, 0));
+		fyr_error_check(fyr, fyt, err_out, "fy_path_token_queue() failed\n");
+
+		return 0;
+	}
+
+	fyt = NULL;
+	type = FYTT_NONE;
+	simple_token_count = 0;
+
+	switch (c) {
+	case '/':
+		type = FYTT_PE_SLASH;
+		simple_token_count = 1;
+		break;
+	case '^':
+		type = FYTT_PE_ROOT;
+		simple_token_count = 1;
+		break;
+	case '.':
+		if (fy_reader_peek_at(fyr, 1) == '.') {
+			type = FYTT_PE_PARENT;
+			simple_token_count = 2;
+		} else {
+			type = FYTT_PE_THIS;
+			simple_token_count = 1;
+		}
+		break;
+
+	case '*':
+		if (fy_reader_peek_at(fyr, 1) == '*') {
+			type = FYTT_PE_EVERY_CHILD_R;
+			simple_token_count = 2;
+		} else if (!fy_is_first_alpha(fy_reader_peek_at(fyr, 1))) {
+			type = FYTT_PE_EVERY_CHILD;
+			simple_token_count = 1;
+		} else {
+			type = FYTT_PE_ALIAS;
+			simple_token_count = 2;
+			while (fy_is_alnum(fy_reader_peek_at(fyr, simple_token_count)))
+				simple_token_count++;
+		}
+		break;
+
+	default:
+		type = FYTT_NONE;
+		break;
+	}
+
+	/* simple tokens */
+	if (simple_token_count > 0) {
+		fyt = fy_path_token_queue(fypp, type, fy_reader_fill_atom_a(fyr, simple_token_count));
+		fyr_error_check(fyr, fyt, err_out, "fy_path_token_queue() failed\n");
+
+		return 0;
+	}
+
+	if (fy_is_first_alpha(c))
+		return fy_path_fetch_simple_map_key(fypp, c);
+
+	if (c == '"' || c == '\'')
+		return fy_path_fetch_quoted_scalar_map_key(fypp, c);
+
+#if 0
+	if (c == '[' || c == '{')
+		return fy_path_fetch_collection_map_key(fypp, c);
+#endif
+
+	FYR_PARSE_ERROR(fyr, 0, 1, FYEM_SCAN, "bad path expression start");
+
+err_out:
+	fypp->stream_error = true;
+	rc = -1;
+	return rc;
+}
+
+struct fy_token *fy_path_scan_peek(struct fy_path_parser *fypp)
+{
+	struct fy_token *fyt;
+	struct fy_reader *fyr;
+	int rc, last_token_activity_counter;
+
+	fyr = &fypp->reader;
+
+	/* nothing if stream end produced (and no stream end token in queue) */
+	if (fypp->stream_end_produced) {
+		fyt = fy_token_list_head(&fypp->queued_tokens);
+		if (fyt && fyt->type == FYTT_STREAM_END)
+			return fyt;
+
+		/* OK, we're done, flush everything */
+		fy_token_list_unref_all(&fypp->queued_tokens);
+
+		fy_debug(fypp->diag, "token stream ends");
+		return NULL;
+	}
+
+	/* we loop until we have a token and the simple key list is empty */
+	for (;;) {
+		fyt = fy_token_list_head(&fypp->queued_tokens);
+		if (fyt)
+			break;
+
+		/* on stream error we're done */
+		if (fypp->stream_error)
+			return NULL;
+
+		/* keep track of token activity, if it didn't change
+		* after the fetch tokens call, the state machine is stuck
+		*/
+		last_token_activity_counter = fypp->token_activity_counter;
+
+		/* fetch more then */
+		rc = fy_path_fetch_tokens(fypp);
+		if (rc) {
+			fy_error(fypp->diag, "fy_path_fetch_tokens() failed\n");
+			goto err_out;
+		}
+		if (last_token_activity_counter == fypp->token_activity_counter) {
+			fy_error(fypp->diag, "out of tokens and failed to produce anymore");
+			goto err_out;
+		}
+	}
+
+	switch (fyt->type) {
+	case FYTT_STREAM_START:
+		fypp->stream_start_produced = true;
+		break;
+	case FYTT_STREAM_END:
+		fypp->stream_end_produced = true;
+
+		rc = fy_reader_input_done(fyr);
+		if (rc) {
+			fy_error(fypp->diag, "fy_parse_input_done() failed");
+			goto err_out;
+		}
+		break;
+	default:
+		break;
+	}
+
+	return fyt;
+
+err_out:
+	return NULL;
+}
+
+
+struct fy_token *fy_path_scan_remove(struct fy_path_parser *fypp, struct fy_token *fyt)
+{
+	if (!fypp || !fyt)
+		return NULL;
+
+	fy_token_list_del(&fypp->queued_tokens, fyt);
+
+	return fyt;
+}
+
+struct fy_token *fy_path_scan_remove_peek(struct fy_path_parser *fypp, struct fy_token *fyt)
+{
+	fy_token_unref(fy_path_scan_remove(fypp, fyt));
+
+	return fy_path_scan_peek(fypp);
+}
+
+struct fy_token *fy_path_scan(struct fy_path_parser *fypp)
+{
+	char buf[80];
+	struct fy_token *fyt;
+
+	fyt = fy_path_scan_remove(fypp, fy_path_scan_peek(fypp));
+
+	if (fyt)
+		fy_notice(fypp->diag, "%s: %s\n", __func__,
+				fy_token_dump_format(fyt, buf, sizeof(buf)));
+	return fyt;
+}
+

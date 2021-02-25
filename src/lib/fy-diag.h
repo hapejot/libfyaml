@@ -150,62 +150,6 @@ void fy_parser_diag_report(struct fy_parser *fyp,
 		} \
 	} while(0)
 
-/* reader diagnostics */
-
-struct fy_reader;
-
-int fy_reader_vdiag(struct fy_reader *fyr, unsigned int flags,
-		    const char *file, int line, const char *func,
-		    const char *fmt, va_list ap);
-
-int fy_reader_diag(struct fy_reader *fyr, unsigned int flags,
-		   const char *file, int line, const char *func,
-		   const char *fmt, ...)
-			__attribute__((format(printf, 6, 7)));
-
-void fy_reader_diag_vreport(struct fy_reader *fyr,
-			    const struct fy_diag_report_ctx *fydrc,
-			    const char *fmt, va_list ap);
-void fy_reader_diag_report(struct fy_reader *fyr,
-			   const struct fy_diag_report_ctx *fydrc,
-			   const char *fmt, ...)
-		__attribute__((format(printf, 3, 4)));
-
-#ifndef NDEBUG
-
-#define fyr_debug(_fyr, _fmt, ...) \
-	fy_reader_diag((_fyr), FYET_DEBUG, \
-			__FILE__, __LINE__, __func__, \
-			(_fmt) , ## __VA_ARGS__)
-#else
-
-#define fyr_debug(_fyr, _fmt, ...) \
-	do { } while(0)
-
-#endif
-
-#define fyr_info(_fyr, _fmt, ...) \
-	fy_reader_diag((_fyr), FYET_INFO, __FILE__, __LINE__, __func__, \
-			(_fmt) , ## __VA_ARGS__)
-#define fyr_notice(_fyr, _fmt, ...) \
-	fy_reader_diag((_fyr), FYET_NOTICE, __FILE__, __LINE__, __func__, \
-			(_fmt) , ## __VA_ARGS__)
-#define fyr_warning(_fyr, _fmt, ...) \
-	fy_reader_diag((_fyr), FYET_WARNING, __FILE__, __LINE__, __func__, \
-			(_fmt) , ## __VA_ARGS__)
-#define fyr_error(_fyr, _fmt, ...) \
-	fy_reader_diag((_fyr), FYET_ERROR, __FILE__, __LINE__, __func__, \
-			(_fmt) , ## __VA_ARGS__)
-
-#define fyr_error_check(_fyr, _cond, _label, _fmt, ...) \
-	do { \
-		if (!(_cond)) { \
-			fyr_error((_fyr), _fmt, ## __VA_ARGS__); \
-			goto _label ; \
-		} \
-	} while(0)
-
-
 #define _FYP_TOKEN_DIAG(_fyp, _fyt, _type, _module, _fmt, ...) \
 	do { \
 		struct fy_diag_report_ctx _drc; \
@@ -291,6 +235,147 @@ void fy_reader_diag_report(struct fy_reader *fyr,
 
 #define FYP_NODE_WARNING(_fyp, _fyn, _type, _module, _fmt, ...) \
 	FYP_NODE_DIAG(_fyp, _fyn, FYET_WARNING, _module, _fmt, ## __VA_ARGS__)
+
+/* reader diagnostics */
+
+struct fy_reader;
+
+int fy_reader_vdiag(struct fy_reader *fyr, unsigned int flags,
+		    const char *file, int line, const char *func,
+		    const char *fmt, va_list ap);
+
+int fy_reader_diag(struct fy_reader *fyr, unsigned int flags,
+		   const char *file, int line, const char *func,
+		   const char *fmt, ...)
+			__attribute__((format(printf, 6, 7)));
+
+void fy_reader_diag_vreport(struct fy_reader *fyr,
+			    const struct fy_diag_report_ctx *fydrc,
+			    const char *fmt, va_list ap);
+void fy_reader_diag_report(struct fy_reader *fyr,
+			   const struct fy_diag_report_ctx *fydrc,
+			   const char *fmt, ...)
+		__attribute__((format(printf, 3, 4)));
+
+#ifndef NDEBUG
+
+#define fyr_debug(_fyr, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_DEBUG, \
+			__FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+#else
+
+#define fyr_debug(_fyr, _fmt, ...) \
+	do { } while(0)
+
+#endif
+
+#define fyr_info(_fyr, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_INFO, __FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+#define fyr_notice(_fyr, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_NOTICE, __FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+#define fyr_warning(_fyr, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_WARNING, __FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+#define fyr_error(_fyr, _fmt, ...) \
+	fy_reader_diag((_fyr), FYET_ERROR, __FILE__, __LINE__, __func__, \
+			(_fmt) , ## __VA_ARGS__)
+
+#define fyr_error_check(_fyr, _cond, _label, _fmt, ...) \
+	do { \
+		if (!(_cond)) { \
+			fyr_error((_fyr), _fmt, ## __VA_ARGS__); \
+			goto _label ; \
+		} \
+	} while(0)
+
+#define _FYR_TOKEN_DIAG(_fyr, _fyt, _type, _module, _fmt, ...) \
+	do { \
+		struct fy_diag_report_ctx _drc; \
+		memset(&_drc, 0, sizeof(_drc)); \
+		_drc.type = (_type); \
+		_drc.module = (_module); \
+		_drc.fyt = (_fyt); \
+		fy_reader_diag_report((_fyr), &_drc, (_fmt) , ## __VA_ARGS__); \
+	} while(0)
+
+#define FYR_TOKEN_DIAG(_fyr, _fyt, _type, _module, _fmt, ...) \
+	_FYR_TOKEN_DIAG(_fyr, fy_token_ref(_fyt), _type, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_PARSE_DIAG(_fyr, _adv, _cnt, _type, _module, _fmt, ...) \
+	_FYR_TOKEN_DIAG(_fyr, \
+		fy_token_create(FYTT_INPUT_MARKER, \
+			fy_reader_fill_atom_at((_fyr), (_adv), (_cnt), \
+			alloca(sizeof(struct fy_atom)))), \
+		_type, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_MARK_DIAG(_fyr, _sm, _em, _type, _module, _fmt, ...) \
+	_FYR_TOKEN_DIAG(_fyr, \
+		fy_token_create(FYTT_INPUT_MARKER, \
+			fy_reader_fill_atom_mark(((_fyr)), (_sm), (_em), \
+				alloca(sizeof(struct fy_atom)))), \
+		_type, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_NODE_DIAG(_fyr, _fyn, _type, _module, _fmt, ...) \
+	_FYR_TOKEN_DIAG(_fyr, fy_node_token(_fyn), _type, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_TOKEN_ERROR(_fyr, _fyt, _module, _fmt, ...) \
+	FYR_TOKEN_DIAG(_fyr, _fyt, FYET_ERROR, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_PARSE_ERROR(_fyr, _adv, _cnt, _module, _fmt, ...) \
+	FYR_PARSE_DIAG(_fyr, _adv, _cnt, FYET_ERROR, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_MARK_ERROR(_fyr, _sm, _em, _module, _fmt, ...) \
+	FYR_MARK_DIAG(_fyr, _sm, _em, FYET_ERROR, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_NODE_ERROR(_fyr, _fyn, _module, _fmt, ...) \
+	FYR_NODE_DIAG(_fyr, _fyn, FYET_ERROR, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_TOKEN_ERROR_CHECK(_fyr, _fyt, _module, _cond, _label, _fmt, ...) \
+	do { \
+		if (!(_cond)) { \
+			FYR_TOKEN_ERROR(_fyr, _fyt, _module, _fmt, ## __VA_ARGS__); \
+			goto _label; \
+		} \
+	} while(0)
+
+#define FYR_PARSE_ERROR_CHECK(_fyr, _adv, _cnt, _module, _cond, _label, _fmt, ...) \
+	do { \
+		if (!(_cond)) { \
+			FYR_PARSE_ERROR(_fyr, _adv, _cnt, _module, _fmt, ## __VA_ARGS__); \
+			goto _label; \
+		} \
+	} while(0)
+
+#define FYR_MARK_ERROR_CHECK(_fyr, _sm, _em, _module, _cond, _label, _fmt, ...) \
+	do { \
+		if (!(_cond)) { \
+			FYR_MARK_ERROR(_fyr, _sm, _em, _module, _fmt, ## __VA_ARGS__); \
+			goto _label; \
+		} \
+	} while(0)
+
+#define FYR_NODE_ERROR_CHECK(_fyr, _fyn, _module, _cond, _label, _fmt, ...) \
+	do { \
+		if (!(_cond)) { \
+			FYR_NODE_ERROR(_fyr, _fyn, _module, _fmt, ## __VA_ARGS__); \
+			goto _label; \
+		} \
+	} while(0)
+
+#define FYR_TOKEN_WARNING(_fyr, _fyt, _module, _fmt, ...) \
+	FYR_TOKEN_DIAG(_fyr, _fyt, FYET_WARNING, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_PARSE_WARNING(_fyr, _adv, _cnt, _module, _fmt, ...) \
+	FYR_PARSE_DIAG(_fyr, _adv, _cnt, FYET_WARNING, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_MARK_WARNING(_fyr, _sm, _em, _module, _fmt, ...) \
+	FYR_MARK_DIAG(_fyr, _sm, _em, FYET_WARNING, _module, _fmt, ## __VA_ARGS__)
+
+#define FYR_NODE_WARNING(_fyr, _fyn, _type, _module, _fmt, ...) \
+	FYR_NODE_DIAG(_fyr, _fyn, FYET_WARNING, _module, _fmt, ## __VA_ARGS__)
 
 /* doc */
 struct fy_document;

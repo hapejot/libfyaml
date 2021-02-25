@@ -480,7 +480,7 @@ int do_testsuite(struct fy_parser *fyp)
 	return fyp->stream_error ? -1 : 0;
 }
 
-static void dump_token(struct fy_parser *fyp, struct fy_token *fyt)
+static void dump_token(struct fy_token *fyt)
 {
 	const char *style;
 
@@ -586,6 +586,76 @@ static void dump_token(struct fy_parser *fyp, struct fy_token *fyt)
 		printf("%s value='%s'\n", "INPUT_MARKER",
 				fy_atom_get_esc_text_a(&fyt->handle));
 		break;
+
+	case FYTT_PE_SLASH:
+		printf("%s value='%s'\n", "SLASH",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_ROOT:
+		printf("%s value='%s'\n", "ROOT",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_THIS:
+		printf("%s value='%s'\n", "THIS",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_PARENT:
+		printf("%s value='%s'\n", "PARENT",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_MAP_KEY:
+		printf("%s value='%s'\n", "MAP_KEY",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_SEQ_INDEX:
+		printf("%s value='%s'\n", "SEQ_INDEX",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_SEQ_SLICE:
+		printf("%s value='%s'\n", "SEQ_SLICE",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_SCALAR_FILTER:
+		printf("%s value='%s'\n", "SCALAR_FILTER",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_COLLECTION_FILTER:
+		printf("%s value='%s'\n", "COLLECTION_FILTER",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_SEQ_FILTER:
+		printf("%s value='%s'\n", "SEQ_FILTER",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_MAP_FILTER:
+		printf("%s value='%s'\n", "MAP_FILTER",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_EVERY_CHILD:
+		printf("%s value='%s'\n", "EVERY_CHILD",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_EVERY_CHILD_R:
+		printf("%s value='%s'\n", "EVERY_CHILD_R",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_ALIAS:
+		printf("%s value='%s'\n", "PE-ALIAS",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
 	}
 }
 
@@ -594,7 +664,7 @@ int do_scan(struct fy_parser *fyp)
 	struct fy_token *fyt;
 
 	while ((fyt = fy_scan(fyp)) != NULL) {
-		dump_token(fyp, fyt);
+		dump_token(fyt);
 		fy_token_unref(fyt);
 	}
 
@@ -2676,71 +2746,40 @@ int do_reader(struct fy_parser *fyp, int indent, int width, bool resolve, bool s
 
 int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart, int indent, int width, bool resolve, bool sort)
 {
-	struct fy_walk_ctx *wc;
-	struct fy_walk_result_list results;
-	struct fy_walk_result *fwr;
-	struct fy_document *fyd;
-	struct fy_node *fyn;
+	struct fy_path_parser fypp_data, *fypp = &fypp_data;
+	struct fy_token *fyt;
+	struct fy_input *fyi;
 	unsigned int flags;
-	int rc, count;
-	char *path;
+	int rc;
 
 	flags = 0;
 	if (sort)
 		flags |= FYECF_SORT_KEYS;
 	flags |= FYECF_INDENT(indent) | FYECF_WIDTH(width);
 
-	fy_notice(fyp->diag, "creating walk for \"%s\"\n", walkpath);
+	fy_notice(fyp->diag, "setting up path parser for \"%s\"\n", walkpath);
 
-	wc = fy_walk_create(walkpath, (size_t)-1, fyp->diag);
-	if (!wc) {
-		fy_error(fyp->diag, "failed to create walk for \"%s\"\n", walkpath);
-		return -1;
+	fy_path_parser_setup(fypp, fyp->diag);
+
+	fyi = fy_input_from_data(walkpath, FY_NT, NULL, false);
+	assert(fyi);
+	
+	rc = fy_path_parser_open(fypp, fyi, NULL);
+	assert(!rc);
+
+	fy_notice(fyp->diag, "path parser input set for \"%s\"\n", walkpath);
+
+	while ((fyt = fy_path_scan(fypp)) != NULL) {
+		dump_token(fyt);
+		fy_token_unref(fyt);
 	}
 
-	walk_dump(fyp->diag, wc);
+	fy_path_parser_close(fypp);
 
-	count = 0;
-	while ((fyd = fy_parse_load_document(fyp)) != NULL) {
+	fy_input_unref(fyi);
+	fy_path_parser_cleanup(fypp);
 
-		if (resolve) {
-			rc = fy_document_resolve(fyd);
-			if (rc)
-				return -1;
-		}
-
-		fyn = fy_node_by_path(fy_document_root(fyd), walkstart, FY_NT, FYNWF_DONT_FOLLOW);
-		if (!fyn) {
-			printf("could not find walkstart node %s\n", walkstart);
-			continue;
-		}
-
-		fy_walk_result_list_init(&results);
-
-		fy_walk_perform(wc, &results, fyn);
-
-		fy_emit_document_to_file(fyd, flags, NULL);
-
-		printf("\n");
-		while ((fwr = fy_walk_result_list_pop(&results)) != NULL) {
-
-			path = fy_node_get_path(fwr->fyn);
-			assert(path);
-
-			printf("> %s\n", path);
-			free(path);
-
-			fy_walk_result_free(fwr);
-		}
-
-		fy_parse_document_destroy(fyp, fyd);
-
-		count++;
-	}
-
-	fy_walk_destroy(wc);
-
-	return count > 0 ? 0 : -1;
+	return 0;
 }
 
 

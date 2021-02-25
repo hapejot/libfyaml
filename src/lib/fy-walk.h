@@ -29,6 +29,7 @@
 #include "fy-docstate.h"
 #include "fy-accel.h"
 #include "fy-doc.h"
+#include "fy-token.h"
 
 struct fy_walk_result {
 	struct list_head node;
@@ -176,7 +177,7 @@ struct fy_path_expr {
 	struct list_head node;
 	struct fy_path_expr *parent;
 	struct fy_path_expr_list children;
-	struct fy_atom handle;
+	enum fy_path_expr_type type;
 };
 FY_TYPE_DECL_LIST(path_expr);
 
@@ -184,14 +185,25 @@ struct fy_path_parser {
 	struct fy_diag *diag;
 	struct fy_reader reader;
 	struct fy_path_expr *root;
+	struct fy_token_list queued_tokens;
+	bool stream_start_produced;
+	bool stream_end_produced;
+	bool stream_error;
+	int token_activity_counter;
 };
 
 void fy_path_parser_setup(struct fy_path_parser *fypp, struct fy_diag *diag);
 void fy_path_parser_cleanup(struct fy_path_parser *fypp);
+int fy_path_parser_open(struct fy_path_parser *fypp, 
+			struct fy_input *fyi, const struct fy_reader_input_cfg *icfg);
+void fy_path_parser_close(struct fy_path_parser *fypp);
+
+struct fy_token *fy_path_scan(struct fy_path_parser *fypp);
 
 struct fy_path_expr *
 fy_path_parser_parse(struct fy_path_parser *fypp, struct fy_path_expr *parent);
 
 int fy_path_expr_eval(struct fy_path_expr *expr, struct fy_walk_result_list *results, struct fy_node *fyn);
+
 
 #endif

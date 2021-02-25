@@ -154,6 +154,7 @@ struct fy_parser {
 	bool document_first_content_token : 1;
 	bool bare_document_only : 1;		/* no document start indicators allowed, no directives */
 	bool stream_has_content : 1;
+	bool parse_flow_only : 1;	/* document is in flow form, and stop parsing at the end */
 	int flow_level;
 	int pending_complex_key_column;
 	struct fy_mark pending_complex_key_mark;
@@ -516,5 +517,8 @@ void fy_parser_set_next_single_document(struct fy_parser *fyp);
 void *fy_alloc_default(void *userdata, size_t size);
 void fy_free_default(void *userdata, void *ptr);
 void *fy_realloc_default(void *userdata, void *ptr, size_t size);
+
+int fy_reader_fetch_flow_scalar_handle(struct fy_reader *fyr, int c, int indent, struct fy_atom *handle);
+int fy_reader_fetch_plain_scalar_handle(struct fy_reader *fyr, int c, int indent, int flow_level, struct fy_atom *handle);
 
 #endif
