@@ -147,6 +147,7 @@ struct fy_parser {
 	bool suppress_recycling : 1;
 	bool stream_start_produced : 1;
 	bool stream_end_produced : 1;
+	bool stream_end_reached : 1;
 	bool simple_key_allowed : 1;
 	bool stream_error : 1;
 	bool generated_block_map : 1;
@@ -441,6 +442,20 @@ fy_fill_atom_at(struct fy_parser *fyp, int advance, int count, struct fy_atom *h
 {
 	assert(fyp);
 	return fy_reader_fill_atom_at(fyp->reader, advance, count, handle);
+}
+
+static inline void
+fy_parser_set_reader(struct fy_parser *fyp, struct fy_reader *fyr)
+{
+	if (!fyp)
+		return;
+	fyp->reader = fyr ? : &fyp->builtin_reader;
+}
+
+static inline void
+fy_parser_set_flow_only_mode(struct fy_parser *fyp, bool flow_only_mode)
+{
+	fyp->parse_flow_only = flow_only_mode;
 }
 
 #define fy_fill_atom_a(_fyp, _advance) \

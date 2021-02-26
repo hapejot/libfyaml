@@ -2699,12 +2699,13 @@ static const struct fy_reader_ops test_parser_reader_ops = {
 
 int do_reader(struct fy_parser *fyp, int indent, int width, bool resolve, bool sort)
 {
-	const char *data = "this is a test";
+	const char *data = "this is a test-testing: more data";
 	struct test_parser parser;
 	struct fy_diag_cfg dcfg;
 	struct fy_diag *diag;
 	struct fy_reader *fyr;
 	struct fy_input *fyi;
+	struct fy_document *fyd;
 	char ubuf[5];
 	int c, r;
 
@@ -2726,9 +2727,31 @@ int do_reader(struct fy_parser *fyp, int indent, int width, bool resolve, bool s
 	assert(!r);
 	fyr_notice(fyr, "Reader input opened\n");
 
-	while ((c = fy_reader_get(fyr)) >= 0) {
+	while ((c = fy_reader_peek(fyr)) >= 0 && c != '{' && c != '[' && c != '"' && c != '\'' && c != '-') {
+		fy_reader_advance(fyr, c);
 		fy_utf8_put_unchecked(ubuf, c);
 		fyr_notice(fyr,  "%.*s %d\n", (int)fy_utf8_width(c), ubuf, c);
+	}
+
+	if (c > 0) {
+		fy_parser_set_reader(fyp, fyr);
+		fy_parser_set_flow_only_mode(fyp, true);
+
+		fyd = fy_parse_load_document(fyp);
+		if (fyd) {
+			fyr_notice(fyr, "parsed a yaml document\n");
+		}
+
+		(void)fy_emit_document_to_file(fyd, 0, NULL);
+
+		fy_document_destroy(fyd);
+
+		/* remaining */
+		while ((c = fy_reader_peek(fyr)) >= 0) {
+			fy_reader_advance(fyr, c);
+			fy_utf8_put_unchecked(ubuf, c);
+			fyr_notice(fyr,  "%.*s %d\n", (int)fy_utf8_width(c), ubuf, c);
+		}
 	}
 
 	fy_reader_input_done(fyr);

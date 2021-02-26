@@ -1291,7 +1291,9 @@ int fy_fetch_stream_end(struct fy_parser *fyp)
 	struct fy_token *fyt;
 	int rc;
 
-	fy_reader_stream_end(fyp->reader);
+	/* only reset the stream in regular mode */
+	if (!fyp->parse_flow_only)
+		fy_reader_stream_end(fyp->reader);
 
 	fy_remove_all_simple_keys(fyp);
 
@@ -1855,6 +1857,13 @@ int fy_fetch_flow_collection_mark_end(struct fy_parser *fyp, int c)
 	fyt = fy_token_queue(fyp, type, fy_fill_atom_a(fyp, 1));
 	fyp_error_check(fyp, fyt, err_out_rc,
 			"fy_token_queue() failed");
+
+	if (fyp->parse_flow_only && fyp->flow_level == 0) {
+		rc = fy_fetch_stream_end(fyp);
+		fyp_error_check(fyp, !rc, err_out_rc,
+				"fy_fetch_stream_end() failed");
+		return 0;
+	}
 
 	/* the comment indicator must have at least a space */
 	c = fy_parse_peek(fyp);
@@ -3539,6 +3548,13 @@ int fy_fetch_flow_scalar(struct fy_parser *fyp, int c)
 	fyp_error_check(fyp, fyt, err_out_rc,
 			"fy_token_queue() failed");
 
+	if (fyp->parse_flow_only && fyp->flow_level == 0) {
+		rc = fy_fetch_stream_end(fyp);
+		fyp_error_check(fyp, !rc, err_out_rc,
+				"fy_fetch_stream_end() failed");
+		return 0;
+	}
+
 	is_complex = fyp->pending_complex_key_column >= 0;
 	is_multiline = handle.end_mark.line > handle.start_mark.line;
 
@@ -3627,6 +3643,13 @@ int fy_fetch_plain_scalar(struct fy_parser *fyp, int c)
 	fyp_error_check(fyp, fyt, err_out_rc,
 			"fy_token_queue() failed");
 
+	if (fyp->parse_flow_only && fyp->flow_level == 0) {
+		rc = fy_fetch_stream_end(fyp);
+		fyp_error_check(fyp, !rc, err_out_rc,
+				"fy_fetch_stream_end() failed");
+		return 0;
+	}
+
 	if (is_multiline && !fyp->flow_level && !is_complex) {
 		/* due to the weirdness with simple keys scan forward
 		* until a linebreak, ';', or anything else */
@@ -3668,6 +3691,10 @@ int fy_fetch_tokens(struct fy_parser *fyp)
 	struct fy_mark m;
 	int c, rc;
 
+	/* do not fetch any more when stream end is reached */
+	if (fyp->stream_end_reached)
+		return 0;
+
 	if (!fyp->stream_start_produced) {
 		rc = fy_parse_get_next_input(fyp);
 		fyp_error_check(fyp, rc >= 0, err_out_rc,
@@ -3692,6 +3719,8 @@ int fy_fetch_tokens(struct fy_parser *fyp)
 
 	c = fy_parse_peek(fyp);
 	if (c < 0 || c == '\0') {
+
+		fyp->stream_end_reached = true;
 
 		FYP_PARSE_ERROR_CHECK(fyp, 0, 1, FYEM_SCAN,
 				!fyp_json_mode(fyp) || c != '\0', err_out,
@@ -3928,6 +3957,7 @@ struct fy_token *fy_scan_peek(struct fy_parser *fyp)
 
 		fyp->stream_start_produced = false;
 		fyp->stream_end_produced = false;
+		fyp->stream_end_reached = false;
 	}
 
 	/* we loop until we have a token and the simple key list is empty */
@@ -3969,9 +3999,11 @@ struct fy_token *fy_scan_peek(struct fy_parser *fyp)
 		fyp_scan_debug(fyp, "setting stream_end_produced to true");
 		fyp->stream_end_produced = true;
 
-		rc = fy_reader_input_done(fyp->reader);
-		fyp_error_check(fyp, !rc, err_out,
-				"fy_parse_input_done() failed");
+		if (!fyp->parse_flow_only) {
+			rc = fy_reader_input_done(fyp->reader);
+			fyp_error_check(fyp, !rc, err_out,
+					"fy_parse_input_done() failed");
+		}
 		break;
 	default:
 		break;
@@ -5209,8 +5241,9 @@ static void fy_parse_input_reset(struct fy_parser *fyp)
 
 	fy_parse_parse_state_log_list_recycle_all(fyp, &fyp->state_stack);
 
-	fyp->stream_end_produced = false;
 	fyp->stream_start_produced = false;
+	fyp->stream_end_produced = false;
+	fyp->stream_end_reached = false;
 	fyp->state = FYPS_NONE;
 
 	fyp->pending_complex_key_column = -1;
