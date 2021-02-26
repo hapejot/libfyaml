@@ -304,7 +304,7 @@ struct fy_token *fy_token_vcreate(enum fy_token_type type, va_list ap)
 	struct fy_atom *handle;
 	struct fy_token *fyt_td;
 
-	if ((unsigned int)type > FYTT_PE_ALIAS)
+	if ((unsigned int)type > FYTT_PE_COMMA)
 		goto err_out;
 
 	fyt = fy_token_alloc();
@@ -340,6 +340,15 @@ struct fy_token *fy_token_vcreate(enum fy_token_type type, va_list ap)
 
 	case FYTT_PE_MAP_KEY:
 		fyt->map_key.fyd = va_arg(ap, struct fy_document *);
+		break;
+
+	case FYTT_PE_SEQ_INDEX:
+		fyt->seq_index.index = va_arg(ap, int);
+		break;
+
+	case FYTT_PE_SEQ_SLICE:
+		fyt->seq_slice.start_index = va_arg(ap, int);
+		fyt->seq_slice.end_index = va_arg(ap, int);
 		break;
 
 	case FYTT_NONE:
@@ -1049,6 +1058,14 @@ char *fy_token_debug_text(struct fy_token *fyt)
 
 	case FYTT_PE_ALIAS:
 		typetxt = "PE-ALIAS";
+		break;
+
+	case FYTT_PE_SIBLING:
+		typetxt = "PE-SIBLING";
+		break;
+
+	case FYTT_PE_COMMA:
+		typetxt = "PE-COMMA";
 		break;
 
 	default:

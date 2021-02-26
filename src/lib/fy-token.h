@@ -66,6 +66,8 @@ enum fy_token_type {
 	FYTT_PE_EVERY_CHILD,
 	FYTT_PE_EVERY_CHILD_R,
 	FYTT_PE_ALIAS,
+	FYTT_PE_SIBLING,
+	FYTT_PE_COMMA,
 };
 
 static inline bool fy_token_type_is_content(enum fy_token_type type)
@@ -131,6 +133,13 @@ struct fy_token {
 		struct {
 			struct fy_document *fyd;	/* when key is complex */
 		} map_key;
+		struct {
+			int index;
+		} seq_index;
+		struct {
+			int start_index;
+			int end_index;
+		} seq_slice;
 	};
 };
 FY_TYPE_DECL_LIST(token);

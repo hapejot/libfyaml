@@ -145,6 +145,7 @@ void fy_walk_result_list_free(struct fy_walk_result_list *results);
 /*********************/
 
 enum fy_path_expr_type {
+	fpet_none,
 	/* ypath */
 	fpet_root,		/* /^ or / at the beginning of the expr */
 	fpet_this,		/* /. */
@@ -160,6 +161,7 @@ enum fy_path_expr_type {
 	fpet_seq_index,
 	fpet_map_key,		/* complex map key (quoted, flow seq or map) */
 	fpet_seq_slice,
+	fpet_alias,
 
 	fpet_multi,
 	fpet_chain,
@@ -178,8 +180,35 @@ struct fy_path_expr {
 	struct fy_path_expr *parent;
 	struct fy_path_expr_list children;
 	enum fy_path_expr_type type;
+	struct fy_token *fyt;
 };
 FY_TYPE_DECL_LIST(path_expr);
+
+enum fy_path_parser_state {
+	/* none */
+	FYPPS_NONE,
+	/* expecting stream start */
+	FYPPS_STREAM_START,
+	/* expect expression start */
+	FYPPS_EXPRESSION_START,
+	/* expect component start */
+	FYPPS_COMPONENT_START,
+	/* expect separator / */
+	FYPPS_SEPARATOR,
+	/* expect separator / or filter */
+	FYPPS_SEPARATOR_OR_FILTER,
+	/* expect component start (but without a prefix, i.e. sibling prefix) */
+	FYPPS_COMPONENT_START_NO_PREFIX,
+	/* expect nothing */
+	FYPPS_END
+};
+
+FY_TYPE_FWD_DECL_LIST(path_parser_state_log);
+struct fy_path_parser_state_log {
+	struct list_head node;
+	enum fy_path_parser_state state;
+};
+FY_TYPE_DECL_LIST(path_parser_state_log);
 
 struct fy_path_parser {
 	struct fy_diag *diag;
@@ -190,6 +219,9 @@ struct fy_path_parser {
 	bool stream_end_produced;
 	bool stream_error;
 	int token_activity_counter;
+
+	enum fy_path_parser_state state;
+	struct fy_path_parser_state_log_list state_stack;
 };
 
 void fy_path_parser_setup(struct fy_path_parser *fypp, struct fy_diag *diag);
@@ -205,5 +237,6 @@ fy_path_parser_parse(struct fy_path_parser *fypp, struct fy_path_expr *parent);
 
 int fy_path_expr_eval(struct fy_path_expr *expr, struct fy_walk_result_list *results, struct fy_node *fyn);
 
+int fy_path_parse(struct fy_path_parser *fypp);
 
 #endif

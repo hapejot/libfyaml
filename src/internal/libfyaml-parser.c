@@ -656,6 +656,16 @@ static void dump_token(struct fy_token *fyt)
 		printf("%s value='%s'\n", "PE-ALIAS",
 				fy_atom_get_esc_text_a(&fyt->handle));
 		break;
+
+	case FYTT_PE_SIBLING:
+		printf("%s value='%s'\n", "PE-SIBLING",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
+
+	case FYTT_PE_COMMA:
+		printf("%s value='%s'\n", "PE-COMMA",
+				fy_atom_get_esc_text_a(&fyt->handle));
+		break;
 	}
 }
 
@@ -2770,7 +2780,7 @@ int do_reader(struct fy_parser *fyp, int indent, int width, bool resolve, bool s
 int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart, int indent, int width, bool resolve, bool sort)
 {
 	struct fy_path_parser fypp_data, *fypp = &fypp_data;
-	struct fy_token *fyt;
+	// struct fy_token *fyt;
 	struct fy_input *fyi;
 	unsigned int flags;
 	int rc;
@@ -2792,10 +2802,14 @@ int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart,
 
 	fy_notice(fyp->diag, "path parser input set for \"%s\"\n", walkpath);
 
+#if 0
 	while ((fyt = fy_path_scan(fypp)) != NULL) {
 		dump_token(fyt);
 		fy_token_unref(fyt);
 	}
+#else
+	fy_path_parse(fypp);
+#endif
 
 	fy_path_parser_close(fypp);
 

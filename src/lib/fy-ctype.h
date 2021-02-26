@@ -159,6 +159,16 @@ static inline bool fy_is_flow_indicator(int c)
 	return !!fy_utf8_strchr(",[]{}", c);
 }
 
+static inline bool fy_is_path_flow_key_start(int c)
+{
+	return c == '"' || c == '\'' || c == '{' || c == '[';
+}
+
+static inline bool fy_is_path_flow_key_end(int c)
+{
+	return c == '"' || c == '\'' || c == '}' || c == ']';
+}
+
 static inline bool fy_is_unicode_control(int c)
 {
         return (c >= 0 && c <= 0x1f) || (c >= 0x80 && c <= 0x9f);
@@ -270,6 +280,8 @@ FY_CTYPE_AT_BUILDER(nb_char);
 FY_CTYPE_AT_BUILDER(ns_char);
 FY_CTYPE_AT_BUILDER(indicator);
 FY_CTYPE_AT_BUILDER(flow_indicator);
+FY_CTYPE_AT_BUILDER(path_flow_key_start);
+FY_CTYPE_AT_BUILDER(path_flow_key_end);
 FY_CTYPE_AT_BUILDER(unicode_control);
 FY_CTYPE_AT_BUILDER(unicode_space);
 FY_CTYPE_AT_BUILDER(json_unescaped);
