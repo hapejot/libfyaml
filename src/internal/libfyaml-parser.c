@@ -2782,7 +2782,6 @@ int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart,
 	return 0;
 }
 
-
 static int modify_module_flags(const char *what, unsigned int *flagsp)
 {
 	static const struct {

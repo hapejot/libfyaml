@@ -141,7 +141,8 @@ struct fy_parser {
 	struct fy_parse_cfg cfg;
 
 	struct fy_input_list queued_inputs;	/* all the inputs queued */
-	struct fy_reader reader;		/* the reader */
+	struct fy_reader builtin_reader;	/* the builtin reader */
+	struct fy_reader *reader;		/* the external reader, or ptr to builtin_reader */
 
 	bool suppress_recycling : 1;
 	bool stream_start_produced : 1;
@@ -207,267 +208,239 @@ struct fy_parser {
 static inline struct fy_input *
 fyp_current_input(const struct fy_parser *fyp)
 {
-	if (!fyp)
-		return NULL;
-	return fy_reader_current_input(&fyp->reader);
+	assert(fyp);
+	return fy_reader_current_input(fyp->reader);
 }
 
 static inline uint64_t
 fyp_current_input_generation(const struct fy_parser *fyp)
 {
-	if (!fyp)
-		return 0;
-	return fy_reader_current_input_generation(&fyp->reader);
+	assert(fyp);
+	return fy_reader_current_input_generation(fyp->reader);
 }
 
 static inline int fyp_column(const struct fy_parser *fyp)
 {
-	if (!fyp)
-		return -1;
-	return fy_reader_column(&fyp->reader);
+	assert(fyp);
+	return fy_reader_column(fyp->reader);
 }
 
 static inline int fyp_line(const struct fy_parser *fyp)
 {
-	if (!fyp)
-		return -1;
-	return fy_reader_line(&fyp->reader);
+	return fy_reader_line(fyp->reader);
 }
 
 static inline int fyp_tabsize(const struct fy_parser *fyp)
 {
-	if (!fyp)
-		return -1;
-	return fy_reader_tabsize(&fyp->reader);
+	return fy_reader_tabsize(fyp->reader);
 }
 
 static inline bool fyp_json_mode(const struct fy_parser *fyp)
 {
-	return fyp && fy_reader_json_mode(&fyp->reader);
+	assert(fyp);
+	return fy_reader_json_mode(fyp->reader);
 }
 
 static inline bool fyp_is_lb(const struct fy_parser *fyp, int c)
 {
-	return fyp && fy_reader_is_lb(&fyp->reader, c);
+	assert(fyp);
+	return fy_reader_is_lb(fyp->reader, c);
 }
 
 static inline bool fyp_is_lbz(const struct fy_parser *fyp, int c)
 {
-	return fyp && fy_reader_is_lbz(&fyp->reader, c);
+	assert(fyp);
+	return fy_reader_is_lbz(fyp->reader, c);
 }
 
 static inline bool fyp_is_blankz(const struct fy_parser *fyp, int c)
 {
-	return fyp && fy_reader_is_blankz(&fyp->reader, c);
+	assert(fyp);
+	return fy_reader_is_blankz(fyp->reader, c);
 }
 
 static inline bool fyp_is_flow_ws(const struct fy_parser *fyp, int c)
 {
-	return fyp && fy_reader_is_flow_ws(&fyp->reader, c);
+	assert(fyp);
+	return fy_reader_is_flow_ws(fyp->reader, c);
 }
 
 static inline bool fyp_is_flow_blank(const struct fy_parser *fyp, int c)
 {
-	return fyp && fy_reader_is_flow_blank(&fyp->reader, c);
+	assert(fyp);
+	return fy_reader_is_flow_blank(fyp->reader, c);
 }
 
 static inline bool fyp_is_flow_blankz(const struct fy_parser *fyp, int c)
 {
-	return fyp && fy_reader_is_flow_blankz(&fyp->reader, c);
+	assert(fyp);
+	return fy_reader_is_flow_blankz(fyp->reader, c);
 }
 
 static inline const void *
 fy_ptr_slow_path(struct fy_parser *fyp, size_t *leftp)
 {
-	if (!fyp)
-		return NULL;
-	return fy_reader_ptr_slow_path(&fyp->reader, leftp);
+	assert(fyp);
+	return fy_reader_ptr_slow_path(fyp->reader, leftp);
 }
 
 static inline const void *
 fy_ensure_lookahead_slow_path(struct fy_parser *fyp, size_t size, size_t *leftp)
 {
-	if (!fyp)
-		return NULL;
-	return fy_reader_ensure_lookahead_slow_path(&fyp->reader, size, leftp);
+	assert(fyp);
+	return fy_reader_ensure_lookahead_slow_path(fyp->reader, size, leftp);
 }
 
 /* only allowed if input does not update */
 static inline void
 fy_get_mark(struct fy_parser *fyp, struct fy_mark *fym)
 {
-	if (!fyp) {
-		memset(fym, 0, sizeof(*fym));
-		return;
-	}
-	return fy_reader_get_mark(&fyp->reader, fym);
+	assert(fyp);
+	return fy_reader_get_mark(fyp->reader, fym);
 }
 
 static inline const void *
 fy_ptr(struct fy_parser *fyp, size_t *leftp)
 {
-	if (!fyp)
-		return NULL;
-	return fy_reader_ptr(&fyp->reader, leftp);
+	assert(fyp);
+	return fy_reader_ptr(fyp->reader, leftp);
 }
 
 static inline const void *
 fy_ensure_lookahead(struct fy_parser *fyp, size_t size, size_t *leftp)
 {
-	if (!fyp)
-		return NULL;
-	return fy_reader_ensure_lookahead(&fyp->reader, size, leftp);
+	assert(fyp);
+	return fy_reader_ensure_lookahead(fyp->reader, size, leftp);
 }
 
 /* advance the given number of ascii characters, not utf8 */
 static inline void
 fy_advance_octets(struct fy_parser *fyp, size_t advance)
 {
-	if (!fyp)
-		return;
-
-	return fy_reader_advance_octets(&fyp->reader, advance);
+	assert(fyp);
+	return fy_reader_advance_octets(fyp->reader, advance);
 }
 
 /* compare string at the current point (n max) */
 static inline int
 fy_parse_strncmp(struct fy_parser *fyp, const char *str, size_t n)
 {
-	if (!fyp)
-		return -1;
-	return fy_reader_strncmp(&fyp->reader, str, n);
+	assert(fyp);
+	return fy_reader_strncmp(fyp->reader, str, n);
 }
 
 static inline int
 fy_parse_peek_at_offset(struct fy_parser *fyp, size_t offset)
 {
-	if (!fyp)
-		return -1;
-	return fy_reader_peek_at_offset(&fyp->reader, offset);
+	assert(fyp);
+	return fy_reader_peek_at_offset(fyp->reader, offset);
 }
 
 static inline int
 fy_parse_peek_at_internal(struct fy_parser *fyp, int pos, ssize_t *offsetp)
 {
-	if (!fyp)
-		return -1;
-	return fy_reader_peek_at_internal(&fyp->reader, pos, offsetp);
+	assert(fyp);
+	return fy_reader_peek_at_internal(fyp->reader, pos, offsetp);
 }
 
 static inline bool
 fy_is_blank_at_offset(struct fy_parser *fyp, size_t offset)
 {
-	if (!fyp)
-		return true;	/* error? */
-
-	return fy_is_blank(fy_reader_peek_at_offset(&fyp->reader, offset));
+	assert(fyp);
+	return fy_is_blank(fy_reader_peek_at_offset(fyp->reader, offset));
 }
 
 static inline bool
 fy_is_blankz_at_offset(struct fy_parser *fyp, size_t offset)
 {
-	if (!fyp)
-		return true;	/* error? */
-
-	return fy_reader_is_blankz(&fyp->reader, fy_reader_peek_at_offset(&fyp->reader, offset));
+	assert(fyp);
+	return fy_reader_is_blankz(fyp->reader, fy_reader_peek_at_offset(fyp->reader, offset));
 }
 
 static inline int
 fy_parse_peek_at(struct fy_parser *fyp, int pos)
 {
-	if (!fyp)
-		return -1;
-
-	return fy_reader_peek_at_internal(&fyp->reader, pos, NULL);
+	assert(fyp);
+	return fy_reader_peek_at_internal(fyp->reader, pos, NULL);
 }
 
 static inline int
 fy_parse_peek(struct fy_parser *fyp)
 {
+	assert(fyp);
 	return fy_parse_peek_at_offset(fyp, 0);
 }
 
 static inline void
 fy_advance(struct fy_parser *fyp, int c)
 {
-	if (!fyp)
-		return;
-	fy_reader_advance(&fyp->reader, c);
+	assert(fyp);
+	fy_reader_advance(fyp->reader, c);
 }
 
 static inline int
 fy_parse_get(struct fy_parser *fyp)
 {
-	if (!fyp)
-		return -1;
-	return fy_reader_get(&fyp->reader);
+	assert(fyp);
+	return fy_reader_get(fyp->reader);
 }
 
 static inline int
 fy_advance_by(struct fy_parser *fyp, int count)
 {
-	if (!fyp)
-		return -1;
-	return fy_reader_advance_by(&fyp->reader, count);
+	assert(fyp);
+	return fy_reader_advance_by(fyp->reader, count);
 }
 
 /* compare string at the current point */
 static inline bool
 fy_parse_strcmp(struct fy_parser *fyp, const char *str)
 {
-	if (!fyp)
-		return false;
-
-	return fy_reader_strcmp(&fyp->reader, str);
+	assert(fyp);
+	return fy_reader_strcmp(fyp->reader, str);
 }
 
 static inline void
 fy_fill_atom_start(struct fy_parser *fyp, struct fy_atom *handle)
 {
-	if (!fyp)
-		return;
-	fy_reader_fill_atom_start(&fyp->reader, handle);
+	assert(fyp);
+	fy_reader_fill_atom_start(fyp->reader, handle);
 }
 
 static inline void
 fy_fill_atom_end_at(struct fy_parser *fyp, struct fy_atom *handle, struct fy_mark *end_mark)
 {
-	if (!fyp)
-		return;
-	fy_reader_fill_atom_end_at(&fyp->reader, handle, end_mark);
+	assert(fyp);
+	fy_reader_fill_atom_end_at(fyp->reader, handle, end_mark);
 }
 
 static inline void
 fy_fill_atom_end(struct fy_parser *fyp, struct fy_atom *handle)
 {
-	if (!fyp)
-		return;
-	fy_reader_fill_atom_end(&fyp->reader, handle);
+	assert(fyp);
+	fy_reader_fill_atom_end(fyp->reader, handle);
 }
 
 static inline struct fy_atom *
 fy_fill_atom(struct fy_parser *fyp, int advance, struct fy_atom *handle)
 {
-	if (!fyp)
-		return NULL;
-	return fy_reader_fill_atom(&fyp->reader, advance, handle);
+	assert(fyp);
+	return fy_reader_fill_atom(fyp->reader, advance, handle);
 }
 
 static inline struct fy_atom *
 fy_fill_atom_mark(struct fy_parser *fyp, const struct fy_mark *start_mark,
 		  const struct fy_mark *end_mark, struct fy_atom *handle)
 {
-	if (!fyp)
-		return NULL;
-	return fy_reader_fill_atom_mark(&fyp->reader, start_mark, end_mark, handle);
+	assert(fyp);
+	return fy_reader_fill_atom_mark(fyp->reader, start_mark, end_mark, handle);
 }
 
 static inline struct fy_atom *
 fy_fill_atom_at(struct fy_parser *fyp, int advance, int count, struct fy_atom *handle)
 {
-	if (!fyp)
-		return NULL;
-	return fy_reader_fill_atom_at(&fyp->reader, advance, count, handle);
+	assert(fyp);
+	return fy_reader_fill_atom_at(fyp->reader, advance, count, handle);
 }
 
 #define fy_fill_atom_a(_fyp, _advance) \
