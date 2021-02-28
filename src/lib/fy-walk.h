@@ -197,13 +197,24 @@ struct fy_path_parser {
 	int token_activity_counter;
 
 	/* operator stack */
-	int operator_top;
-	struct fy_token *operators[100];
+	unsigned int operator_top;
+	unsigned int operator_alloc;
+	struct fy_token **operators;
+	struct fy_token *operators_static[16];
 
 	/* operand stack */
-	int operand_top;
-	struct fy_path_expr *operands[100];
+	unsigned int operand_top;
+	unsigned int operand_alloc;
+	struct fy_path_expr **operands;
+	struct fy_path_expr *operands_static[16];
+
+	/* to avoid allocating */
+	struct fy_path_expr_list expr_recycle;
+	bool suppress_recycling;
 };
+
+struct fy_path_expr *fy_path_expr_alloc(void);
+void fy_path_expr_free(struct fy_path_expr *expr);
 
 void fy_path_parser_setup(struct fy_path_parser *fypp, struct fy_diag *diag);
 void fy_path_parser_cleanup(struct fy_path_parser *fypp);
@@ -213,11 +224,8 @@ void fy_path_parser_close(struct fy_path_parser *fypp);
 
 struct fy_token *fy_path_scan(struct fy_path_parser *fypp);
 
-struct fy_path_expr *
-fy_path_parser_parse(struct fy_path_parser *fypp, struct fy_path_expr *parent);
+struct fy_path_expr *fy_path_parse_expression(struct fy_path_parser *fypp);
 
-int fy_path_expr_eval(struct fy_path_expr *expr, struct fy_walk_result_list *results, struct fy_node *fyn);
-
-int fy_path_parse(struct fy_path_parser *fypp);
+void fy_path_expr_dump(struct fy_path_parser *fypp, struct fy_path_expr *expr, int level, const char *banner);
 
 #endif

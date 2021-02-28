@@ -2780,7 +2780,7 @@ int do_reader(struct fy_parser *fyp, int indent, int width, bool resolve, bool s
 int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart, int indent, int width, bool resolve, bool sort)
 {
 	struct fy_path_parser fypp_data, *fypp = &fypp_data;
-	// struct fy_token *fyt;
+	struct fy_path_expr *expr;
 	struct fy_input *fyi;
 	unsigned int flags;
 	int rc;
@@ -2802,14 +2802,17 @@ int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart,
 
 	fy_notice(fyp->diag, "path parser input set for \"%s\"\n", walkpath);
 
-#if 0
-	while ((fyt = fy_path_scan(fypp)) != NULL) {
+	/* while ((fyt = fy_path_scan(fypp)) != NULL) {
 		dump_token(fyt);
 		fy_token_unref(fyt);
-	}
-#else
-	fy_path_parse(fypp);
-#endif
+	} */
+	expr = fy_path_parse_expression(fypp);
+	if (!expr) {
+		fy_error(fyp->diag, "failed to parse expression\n");
+	} else
+		fy_path_expr_dump(fypp, expr, 0, "fypp root ");
+
+	fy_path_expr_free(expr);
 
 	fy_path_parser_close(fypp);
 

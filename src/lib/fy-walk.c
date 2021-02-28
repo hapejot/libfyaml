@@ -26,7 +26,7 @@
 #include "fy-utils.h"
 
 #ifndef ARRAY_SIZE
-#define ARRAY_SIZE(x) ((int)(sizeof(x)/sizeof((x)[0])))
+#define ARRAY_SIZE(x) ((sizeof(x)/sizeof((x)[0])))
 #endif
 
 /* NOTE that walk results do not take references and it is invalid to
@@ -1340,6 +1340,39 @@ void fy_path_expr_free(struct fy_path_expr *expr)
 	free(expr);
 }
 
+struct fy_path_expr *fy_path_expr_alloc_recycle(struct fy_path_parser *fypp)
+{
+	struct fy_path_expr *expr;
+
+	if (!fypp || fypp->suppress_recycling)
+		return fy_path_expr_alloc();
+
+	expr = fy_path_expr_list_pop(&fypp->expr_recycle);
+	if (expr)
+		return expr;
+
+	return fy_path_expr_alloc();
+}
+
+void fy_path_expr_free_recycle(struct fy_path_parser *fypp, struct fy_path_expr *expr)
+{
+	struct fy_path_expr *exprn;
+
+	if (!fypp || fypp->suppress_recycling) {
+		fy_path_expr_free(expr);
+		return;
+	}
+		
+	while ((exprn = fy_path_expr_list_pop(&expr->children)) != NULL)
+		fy_path_expr_free_recycle(fypp, exprn);
+
+	if (expr->fyt) {
+		fy_token_unref(expr->fyt);
+		expr->fyt = NULL;
+	}
+	fy_path_expr_list_add_tail(&fypp->expr_recycle, expr);
+}
+
 const char *path_expr_type_txt[] = {
 	[fpet_none]			= "none",
 	/* */
@@ -1383,14 +1416,54 @@ void fy_path_parser_setup(struct fy_path_parser *fypp, struct fy_diag *diag)
 	fypp->diag = diag;
 	fy_reader_setup(&fypp->reader, &fy_path_parser_reader_ops);
 	fy_token_list_init(&fypp->queued_tokens);
+
+	/* use the static stack at first, faster */
+	fypp->operators = fypp->operators_static;
+	fypp->operands = fypp->operands_static;
+
+	fypp->operator_alloc = ARRAY_SIZE(fypp->operators_static);
+	fypp->operand_alloc = ARRAY_SIZE(fypp->operands_static);
+
+	fy_path_expr_list_init(&fypp->expr_recycle);
+	fypp->suppress_recycling = !!getenv("FY_VALGRIND");
 }
 
 void fy_path_parser_cleanup(struct fy_path_parser *fypp)
 {
+	struct fy_path_expr *expr;
+	struct fy_token *fyt;
+
 	if (!fypp)
 		return;
+
+	while (fypp->operator_top > 0) {
+		fyt = fypp->operators[--fypp->operator_top];
+		fypp->operators[fypp->operator_top] = NULL;
+		fy_token_unref(fyt);
+	}
+
+	if (fypp->operators != fypp->operators_static)
+		free(fypp->operators);
+	fypp->operators = fypp->operators_static;
+	fypp->operator_alloc = ARRAY_SIZE(fypp->operators_static);
+
+	while (fypp->operand_top > 0) {
+		expr = fypp->operands[--fypp->operand_top];
+		fypp->operands[fypp->operand_top] = NULL;
+		fy_path_expr_free(expr);
+	}
+
+	if (fypp->operands != fypp->operands_static)
+		free(fypp->operands);
+	fypp->operands = fypp->operands_static;
+	fypp->operand_alloc = ARRAY_SIZE(fypp->operands_static);
+
 	fy_reader_cleanup(&fypp->reader);
 	fy_token_list_unref_all(&fypp->queued_tokens);
+
+	while ((expr = fy_path_expr_list_pop(&fypp->expr_recycle)) != NULL)
+		fy_path_expr_free(expr);
+
 }
 
 int fy_path_parser_open(struct fy_path_parser *fypp, 
@@ -1915,40 +1988,103 @@ bool fy_token_type_is_operand_or_operator(enum fy_token_type type)
 	       fy_token_type_is_operator(type);
 }
 
-static void push_operand(struct fy_path_parser *fypp, struct fy_token *fyt, enum fy_path_expr_type type)
+static int
+push_operand(struct fy_path_parser *fypp, struct fy_path_expr *expr)
 {
-	struct fy_path_expr *expr;
-	const char *text;
-	size_t len;
+	struct fy_path_expr **exprs;
+	unsigned int alloc;
+	size_t size;
 
-	assert(fypp->operand_top < ARRAY_SIZE(fypp->operands));
+	/* grow the stack if required */
+	if (fypp->operand_top >= fypp->operand_alloc) {
+		alloc = fypp->operand_alloc;
+		size = alloc * sizeof(*exprs);
 
-	expr = fy_path_expr_alloc();
-	assert(expr);
-	expr->type = type;
-	expr->fyt = fyt;
+		if (fypp->operands == fypp->operands_static) {
+			exprs = malloc(size * 2);
+			if (exprs)
+				memcpy(exprs, fypp->operands_static, size);
+		} else
+			exprs = realloc(fypp->operands, size * 2);
 
-	text = fy_token_get_text(fyt, &len);
+		if (!exprs)
+			return -1;
 
-	fy_notice(fypp->diag, "push operand: %s: %.*s",
-			path_expr_type_txt[expr->type], (int)len, text);
+		fypp->operand_alloc = alloc * 2;
+		fypp->operands = exprs;
+	}
 
 	fypp->operands[fypp->operand_top++] = expr;
+	return 0;
 }
 
-static void push_operator(struct fy_path_parser *fypp, struct fy_token *fyt)
+static struct fy_path_expr *
+pop_operand(struct fy_path_parser *fypp)
 {
-	const char *text;
-	size_t len;
+	struct fy_path_expr *expr;
+
+	if (fypp->operand_top == 0)
+		return NULL;
+
+	expr = fypp->operands[--fypp->operand_top];
+	fypp->operands[fypp->operand_top] = NULL;
+
+	return expr;
+}
+
+static int
+push_operator(struct fy_path_parser *fypp, struct fy_token *fyt)
+{
+	struct fy_token **fyts;
+	unsigned int alloc;
+	size_t size;
 
 	assert(fy_token_type_is_operator(fyt->type));
-	assert(fypp->operator_top < ARRAY_SIZE(fypp->operators));
 
-	text = fy_token_get_text(fyt, &len);
+	/* grow the stack if required */
+	if (fypp->operator_top >= fypp->operator_alloc) {
+		alloc = fypp->operator_alloc;
+		size = alloc * sizeof(*fyts);
 
-	fy_notice(fypp->diag, "push operator: %.*s", (int)len, text);
+		if (fypp->operators == fypp->operators_static) {
+			fyts = malloc(size * 2);
+			if (fyts)
+				memcpy(fyts, fypp->operators_static, size);
+		} else
+			fyts = realloc(fypp->operators, size * 2);
+
+		if (!fyts)
+			return -1;
+
+		fypp->operator_alloc = alloc * 2;
+		fypp->operators = fyts;
+	}
 
 	fypp->operators[fypp->operator_top++] = fyt;
+
+	return 0;
+}
+
+static struct fy_token *
+peek_operator(struct fy_path_parser *fypp)
+{
+	if (fypp->operator_top == 0)
+		return NULL;
+	return fypp->operators[fypp->operator_top - 1];
+}
+
+static struct fy_token *
+pop_operator(struct fy_path_parser *fypp)
+{
+	struct fy_token *fyt;
+
+	if (fypp->operator_top == 0)
+		return NULL;
+
+	fyt = fypp->operators[--fypp->operator_top];
+	fypp->operators[fypp->operator_top] = NULL;
+
+	return fyt;
 }
 
 int fy_token_type_operator_prec(enum fy_token_type type)
@@ -2031,39 +2167,43 @@ const struct fy_mark *fy_path_expr_end_mark(struct fy_path_expr *expr)
 static int evaluate(struct fy_path_parser *fypp)
 {
 	struct fy_reader *fyr;
-	struct fy_token *fyt_top;
-	struct fy_path_expr *exprl, *exprr, *chain, *expr, *multi;
+	struct fy_token *fyt_top = NULL;
+	struct fy_path_expr *exprl = NULL, *exprr = NULL, *chain = NULL, *expr = NULL, *multi = NULL;
 	const struct fy_mark *m1, *m2;
-	const char *text;
-	size_t len;
+	int ret;
 
 	fyr = &fypp->reader;
 
-	fyt_top = fypp->operator_top > 0 ? fypp->operators[fypp->operator_top - 1] : NULL;
-	if (!fyt_top)
-		return -1;
- 	fypp->operators[--fypp->operator_top] = NULL;
-
-	text = fy_token_get_text(fyt_top, &len);
-
-	fy_notice(fypp->diag, "evaluate operator: %.*s", (int)len, text);
+	fyt_top = pop_operator(fypp);
+	fyr_error_check(fyr, fyt_top, err_out,
+			"pop_operator() failed to find token operator to evaluate\n");
 
 	exprl = NULL;
 	exprr = NULL;
 	switch (fyt_top->type) {
+
 	case FYTT_PE_SLASH:
-		exprr = fypp->operand_top > 0 ? fypp->operands[fypp->operand_top - 1] : NULL;
+
+		exprr = pop_operand(fypp);
 		if (!exprr) {
-			fy_notice(fypp->diag, "slash at the beginning is root\n");
-			push_operand(fypp, fyt_top, fpet_root);
+			/* slash at the beginning is root */
+
+			exprr = fy_path_expr_alloc_recycle(fypp);
+			fyr_error_check(fyr, exprr, err_out,
+					"fy_path_expr_alloc_recycle() failed\n");
+
+			exprr->type = fpet_root;
+			exprr->fyt = fyt_top;
+			fyt_top = NULL;
+
+			ret = push_operand(fypp, exprr);
+			fyr_error_check(fyr, !ret, err_out,
+					"push_operand() failed\n");
+			exprr = NULL;
 			break;
 		}
-		fypp->operands[--fypp->operand_top] = NULL;
 
-		exprl = fypp->operand_top > 0 ? fypp->operands[fypp->operand_top - 1] : NULL;
-		if (exprl)
-			fypp->operands[--fypp->operand_top] = NULL;
-
+		exprl = pop_operand(fypp);
 		if (!exprl) {
 
 			m1 = fy_token_start_mark(fyt_top);
@@ -2074,20 +2214,18 @@ static int evaluate(struct fy_path_parser *fypp)
 
 			/* /foo -> add root */
 			if (m1->input_pos < m2->input_pos) {
-				fy_notice(fypp->diag, "chaining operator without left hand side, add root\n");
+				/* / is to the left, it's a root */
+				exprl = fy_path_expr_alloc_recycle(fypp);
+				fyr_error_check(fyr, exprl, err_out,
+						"fy_path_expr_alloc_recycle() failed\n");
 
-				fy_notice(fypp->diag, "m1 %s m2\n",
-						m1->input_pos > m2->input_pos ? ">" : "<");
-
-				exprl = fy_path_expr_alloc();
-				assert(exprl);
 				exprl->type = fpet_root;
 				exprl->fyt = fyt_top;
 				fyt_top = NULL;
 
 			} else {
 
-				fy_notice(fypp->diag, "terminating slash, collection marker\n");
+				/* / is to the right, it's a collection marker */
 
 				/* switch exprl with exprr */
 				exprl = exprr;
@@ -2098,8 +2236,10 @@ static int evaluate(struct fy_path_parser *fypp)
 		/* optimize chains */
 		if (exprl->type != fpet_chain) {
 			/* chaining */
-			chain = fy_path_expr_alloc();
-			assert(chain);
+			chain = fy_path_expr_alloc_recycle(fypp);
+			fyr_error_check(fyr, chain, err_out,
+					"fy_path_expr_alloc_recycle() failed\n");
+
 			chain->type = fpet_chain;
 			chain->fyt = NULL;
 
@@ -2107,13 +2247,18 @@ static int evaluate(struct fy_path_parser *fypp)
 		} else {
 			/* reuse lhs chain */
 			chain = exprl;
+			exprl = NULL;
 		}
 
 		if (!exprr) {
+			/* should never happen, but check */
 			assert(fyt_top);
+
 			/* this is a collection marker */
-			exprr = fy_path_expr_alloc();
-			assert(exprr);
+			exprr = fy_path_expr_alloc_recycle(fypp);
+			fyr_error_check(fyr, exprr, err_out,
+					"fy_path_expr_alloc_recycle() failed\n");
+
 			exprr->type = fpet_assert_collection;
 			exprr->fyt = fyt_top;
 			fyt_top = NULL;
@@ -2126,18 +2271,22 @@ static int evaluate(struct fy_path_parser *fypp)
 			/* move the contents of the chain */
 			while ((expr = fy_path_expr_list_pop(&exprr->children)) != NULL)
 				fy_path_expr_list_add_tail(&chain->children, expr);
-			fy_path_expr_free(exprr);
+			fy_path_expr_free_recycle(fypp, exprr);
 		}
 
-		fy_notice(fypp->diag, "pushing chain\n");
-		fypp->operands[fypp->operand_top++] = chain;
+		ret = push_operand(fypp, chain);
+		fyr_error_check(fyr, !ret, err_out,
+				"push_operand() failed\n");
+		chain = NULL;
 
 		fy_token_unref(fyt_top);
+		fyt_top = NULL;
 
 		break;
 
 	case FYTT_PE_SIBLING:
-		exprr = fypp->operand_top > 0 ? fypp->operands[fypp->operand_top - 1] : NULL;
+
+		exprr = pop_operand(fypp);
 
 		FYR_TOKEN_ERROR_CHECK(fyr, fyt_top, FYEM_PARSE,
 				exprr, err_out,
@@ -2147,46 +2296,52 @@ static int evaluate(struct fy_path_parser *fypp)
 				exprr->fyt && exprr->fyt->type == FYTT_PE_MAP_KEY, err_out,
 				"sibling operator on non-map key");
 
-		fypp->operands[--fypp->operand_top] = NULL;
-
 		/* chaining */
-		chain = fy_path_expr_alloc();
-		assert(chain);
+		chain = fy_path_expr_alloc_recycle(fypp);
+		fyr_error_check(fyr, chain, err_out,
+				"fy_path_expr_alloc_recycle() failed\n");
+
 		chain->type = fpet_chain;
 		chain->fyt = fyt_top;
 		fyt_top = NULL;
 
-		exprl = fy_path_expr_alloc();
-		assert(exprl);
+		exprl = fy_path_expr_alloc_recycle(fypp);
+		fyr_error_check(fyr, exprl, err_out,
+				"fy_path_expr_alloc_recycle() failed\n");
+
 		exprl->type = fpet_parent;
 		exprl->fyt = NULL;
 
 		fy_path_expr_list_add_tail(&chain->children, exprl);
 		fy_path_expr_list_add_tail(&chain->children, exprr);
 
-		fy_notice(fypp->diag, "pushing sibling chain (../key)\n");
-		fypp->operands[fypp->operand_top++] = chain;
+		ret = push_operand(fypp, chain);
+		fyr_error_check(fyr, !ret, err_out,
+				"push_operand() failed\n");
+		chain = NULL;
 
 		break;
 
 	case FYTT_PE_COMMA:
-		exprr = fypp->operand_top > 0 ? fypp->operands[fypp->operand_top - 1] : NULL;
+
+		exprr = pop_operand(fypp);
 		FYR_TOKEN_ERROR_CHECK(fyr, fyt_top, FYEM_PARSE,
 				exprr, err_out,
 				"comma without operands (rhs)");
-		fypp->operands[--fypp->operand_top] = NULL;
 
-		exprl = fypp->operand_top > 0 ? fypp->operands[fypp->operand_top - 1] : NULL;
+		exprl = pop_operand(fypp);
 		FYR_TOKEN_ERROR_CHECK(fyr, fyt_top, FYEM_PARSE,
 				exprl, err_out,
 				"comma without operands (lhs)");
-		fypp->operands[--fypp->operand_top] = NULL;
 
 		/* optimize multi */
 		if (exprl->type != fpet_multi) {
+
 			/* multi */
-			multi = fy_path_expr_alloc();
-			assert(multi);
+			multi = fy_path_expr_alloc_recycle(fypp);
+			fyr_error_check(fyr, multi, err_out,
+					"fy_path_expr_alloc_recycle() failed\n");
+
 			multi->type = fpet_multi;
 			multi->fyt = fyt_top;
 			fyt_top = NULL;
@@ -2204,13 +2359,16 @@ static int evaluate(struct fy_path_parser *fypp)
 			/* move the contents of the chain */
 			while ((expr = fy_path_expr_list_pop(&exprr->children)) != NULL)
 				fy_path_expr_list_add_tail(&multi->children, expr);
-			fy_path_expr_free(exprr);
+			fy_path_expr_free_recycle(fypp, exprr);
 		}
 
-		fy_notice(fypp->diag, "pushing multi\n");
-		fypp->operands[fypp->operand_top++] = multi;
+		ret = push_operand(fypp, multi);
+		fyr_error_check(fyr, !ret, err_out,
+				"push_operand() failed\n");
+		multi = NULL;
 
 		fy_token_unref(fyt_top);
+		fyt_top = NULL;
 
 		break;
 
@@ -2218,33 +2376,37 @@ static int evaluate(struct fy_path_parser *fypp)
 	case FYTT_PE_COLLECTION_FILTER:
 	case FYTT_PE_SEQ_FILTER:
 	case FYTT_PE_MAP_FILTER:
-		exprl = fypp->operand_top > 0 ? fypp->operands[fypp->operand_top - 1] : NULL;
 
+		exprl = pop_operand(fypp);
 		FYR_TOKEN_ERROR_CHECK(fyr, fyt_top, FYEM_PARSE,
 				exprl, err_out,
 				"filter operator without argument");
 
-		fypp->operands[--fypp->operand_top] = NULL;
-
 		if (exprl->type != fpet_chain) {
 			/* chaining */
-			chain = fy_path_expr_alloc();
-			assert(chain);
+			chain = fy_path_expr_alloc_recycle(fypp);
+			fyr_error_check(fyr, chain, err_out,
+					"fy_path_expr_alloc_recycle() failed\n");
+
 			chain->type = fpet_chain;
 			chain->fyt = NULL;
 		} else
 			chain = exprl;
 
-		exprr = fy_path_expr_alloc();
-		assert(exprr);
+		exprr = fy_path_expr_alloc_recycle(fypp);
+		fyr_error_check(fyr, exprr, err_out,
+				"fy_path_expr_alloc_recycle() failed\n");
+
 		exprr->type = fy_map_token_to_path_expr_type(fyt_top->type);
 		exprr->fyt = fyt_top;
 		fyt_top = NULL;
 
 		fy_path_expr_list_add_tail(&chain->children, exprr);
 
-		fy_notice(fypp->diag, "pushing filter chain (../key)\n");
-		fypp->operands[fypp->operand_top++] = chain;
+		ret = push_operand(fypp, chain);
+		fyr_error_check(fyr, !ret, err_out,
+				"push_operand() failed\n");
+		chain = NULL;
 
 		break;
 
@@ -2256,6 +2418,11 @@ static int evaluate(struct fy_path_parser *fypp)
 	return 0;
 
 err_out:
+	fy_token_unref(fyt_top);
+	fy_path_expr_free(exprl);
+	fy_path_expr_free(exprr);
+	fy_path_expr_free(chain);
+	fy_path_expr_free(multi);
 	return -1;
 }
 
@@ -2264,8 +2431,12 @@ fy_path_parse_expression(struct fy_path_parser *fypp)
 {
 	struct fy_reader *fyr;
 	struct fy_token *fyt = NULL, *fyt_top = NULL;
-	struct fy_path_expr *expr = NULL;
+	struct fy_path_expr *expr;
 	int ret;
+
+	/* the parser must be in the correct state */
+	if (!fypp || fypp->operator_top || fypp->operand_top)
+		return NULL;
 
 	fyr = &fypp->reader;
 
@@ -2279,35 +2450,46 @@ fy_path_parse_expression(struct fy_path_parser *fypp)
 	fy_token_unref(fy_path_scan_remove(fypp, fyt));
 	fyt = NULL;
 
-	fypp->operator_top = 0;
-	fypp->operand_top = 0;
-
 	while ((fyt = fy_path_scan_peek(fypp, NULL)) != NULL) {
 
 		if (fyt->type == FYTT_STREAM_END)
 			break;
 
-		FYR_TOKEN_DIAG(fyr, fyt, FYET_NOTICE, FYEM_PARSE, "at token");
-
 		/* if it's an operand convert it to expression and push */
 		if (fy_token_type_is_operand(fyt->type)) {
-			push_operand(fypp, fy_path_scan_remove(fypp, fyt), fy_map_token_to_path_expr_type(fyt->type));
+
+			expr = fy_path_expr_alloc_recycle(fypp);
+			fyr_error_check(fyr, expr, err_out,
+					"fy_path_expr_alloc_recycle() failed\n");
+
+			expr->fyt = fy_path_scan_remove(fypp, fyt);
+			expr->type = fy_map_token_to_path_expr_type(fyt->type);
+			fyt = NULL;
+
+			ret = push_operand(fypp, expr);
+			fyr_error_check(fyr, !ret, err_out, "push_operand() failed\n");
+			expr = NULL;
+
 			continue;
 		}
 
+		/* it's an operator */
 		for (;;) {
 			/* get the top of the operator stack */
-			fyt_top = fypp->operator_top > 0 ? fypp->operators[fypp->operator_top - 1] : NULL;
+			fyt_top = peek_operator(fypp);
 			/* if operator stack is empty or the priority of the new operator is larger, push operator */
 			if (!fyt_top || fy_token_type_operator_prec(fyt->type) > fy_token_type_operator_prec(fyt_top->type)) {
-				push_operator(fypp, fy_path_scan_remove(fypp, fyt));
+				fyt = fy_path_scan_remove(fypp, fyt);
+				ret = push_operator(fypp, fyt);
+				fyr_error_check(fyr, !ret, err_out, "push_operator() failed\n");
+				fyt = NULL;
 				break;
 			}
 
 			ret = evaluate(fypp);
-			FYR_TOKEN_ERROR_CHECK(fyr, fyt_top, FYEM_PARSE,
-					ret == 0, err_out,
-					"failed to evalute path top operator");
+			/* evaluate will print diagnostic on error */
+			if (ret)
+				goto err_out;
 		}
 	}
 
@@ -2315,42 +2497,26 @@ fy_path_parse_expression(struct fy_path_parser *fypp)
 			fyt && fyt->type == FYTT_STREAM_END, err_out,
 			"stream ended without STREAM_END");
 
+	while ((fyt_top = peek_operator(fypp)) != NULL) {
+		ret = evaluate(fypp);
+		/* evaluate will print diagnostic on error */
+		if (ret)
+			goto err_out;
+	}
+
+	FYR_TOKEN_ERROR_CHECK(fyr, fyt, FYEM_PARSE,
+			fypp->operand_top == 1, err_out,
+			"invalid operand stack at end");
+
 	/* remove stream end */
 	fy_token_unref(fy_path_scan_remove(fypp, fyt));
 	fyt = NULL;
 
-	fyr_notice(fyr, "fypp->operator_top=%d fypp->operand_top=%d\n",
-		fypp->operator_top, fypp->operand_top);
-
-	while (fypp->operator_top > 0) {
-		ret = evaluate(fypp);
-		assert(ret == 0);
-	}
-
-	assert(fypp->operator_top == 0);
-	assert(fypp->operand_top == 1);
-
-	fypp->operand_top--;
-	expr = fypp->operands[0];
-	fypp->operands[0] = NULL;
-
-	return expr;
+	/* and return the last operand */
+	return pop_operand(fypp);
 
 err_out:
+	fy_token_unref(fyt);
 	fypp->stream_error = true;
 	return NULL;
-}
-
-int fy_path_parse(struct fy_path_parser *fypp)
-{
-	struct fy_path_expr *expr;
-
-	if (!fypp)
-		return -1;
-
-	expr = fy_path_parse_expression(fypp);
-	if (expr)
-		fy_path_expr_dump(fypp, expr, 0, "fypp root ");
-
-	return 0;
 }
