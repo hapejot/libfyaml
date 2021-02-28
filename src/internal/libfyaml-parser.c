@@ -2781,9 +2781,14 @@ int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart,
 {
 	struct fy_path_parser fypp_data, *fypp = &fypp_data;
 	struct fy_path_expr *expr;
+	struct fy_walk_result_list results;
 	struct fy_input *fyi;
+	struct fy_document *fyd, *fyd2;
+	struct fy_node *fyn, *fyn2;
+	struct fy_walk_result *fwr;
+	char *path;
 	unsigned int flags;
-	int rc;
+	int rc, count;
 
 	flags = 0;
 	if (sort)
@@ -2811,6 +2816,63 @@ int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart,
 		fy_error(fyp->diag, "failed to parse expression\n");
 	} else
 		fy_path_expr_dump(fypp, expr, 0, "fypp root ");
+
+	count = 0;
+	while ((fyd = fy_parse_load_document(fyp)) != NULL) {
+
+		if (resolve) {
+			rc = fy_document_resolve(fyd);
+			if (rc)
+				return -1;
+		}
+
+		fyn = fy_node_by_path(fy_document_root(fyd), walkstart, FY_NT, FYNWF_DONT_FOLLOW);
+		if (!fyn) {
+			printf("could not find walkstart node %s\n", walkstart);
+			continue;
+		}
+
+		fy_emit_document_to_file(fyd, flags, NULL);
+
+		path = fy_node_get_path(fyn);
+		assert(path);
+		printf("walking starting at %s\n", path);
+		free(path);
+
+		fy_walk_result_list_init(&results);
+		fy_path_expr_execute(fypp->diag, expr, &results, fyn);
+
+		printf("\n");
+		printf("results\n");
+		while ((fwr = fy_walk_result_list_pop(&results)) != NULL) {
+
+			path = fy_node_get_path(fwr->fyn);
+			assert(path);
+
+			printf("# %s\n", path);
+			free(path);
+
+			fyd2 = fy_document_create(&fyp->cfg);
+			assert(fyd2);
+
+			fyn2 = fy_node_copy(fyd2, fwr->fyn);
+			assert(fyn2);
+
+			fy_document_set_root(fyd2, fyn2);
+
+			printf("---\n");
+			fy_emit_document_to_file(fyd2, flags, NULL);
+
+			fy_document_destroy(fyd2);
+
+			fy_walk_result_free(fwr);
+		}
+
+		fy_parse_document_destroy(fyp, fyd);
+
+		count++;
+	}
+
 
 	fy_path_expr_free(expr);
 

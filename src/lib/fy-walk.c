@@ -2520,3 +2520,232 @@ err_out:
 	fypp->stream_error = true;
 	return NULL;
 }
+
+int fy_path_expr_execute(struct fy_diag *diag, struct fy_path_expr *expr,
+			 struct fy_walk_result_list *results, struct fy_node *fyn)
+{
+	struct fy_node *fynn, *fyni;
+	struct fy_node_pair *fynp;
+	struct fy_anchor *fya;
+	struct fy_token *fyt;
+	struct fy_path_expr *exprn;
+	struct fy_walk_result *fwrn;
+	struct fy_walk_result_list tresults, nresults;
+	const char *text;
+	size_t len;
+	int start, end, count, i;
+	bool final;
+
+	/* error */
+	if (!expr || !results)
+		return -1;
+
+	/* no node, just return */
+	if (!fyn)
+		return 0;
+
+	// fy_notice(diag, "executing %s at %s\n", path_expr_type_txt[expr->type], fy_node_get_path_alloca(fyn));
+
+	fyt = expr->fyt;
+	/* handle simple ones */
+	fynn = NULL;
+	final = false;
+	switch (expr->type) {
+	case fpet_root:
+		final = true;
+		fynn = fyn->fyd->root;
+		break;
+	case fpet_this:
+		final = true;
+		fynn = fyn;
+		break;
+	case fpet_parent:
+		final = true;
+		fynn = fyn->parent;
+		break;
+	case fpet_alias:
+		final = true;
+		text = fy_token_get_text(fyt, &len);
+		if (text && len > 1) {
+			if (*text == '*') {
+				text++;
+				len--;
+			}
+			fya = fy_document_lookup_anchor(fyn->fyd, text, len);
+			if (fya)
+				fynn = fya->fyn;
+		}
+		break;
+
+	case fpet_seq_index:
+		/* only on sequence */
+		if (!fy_node_is_sequence(fyn))
+			return 0;
+
+		final = true;
+		assert(fyt);
+		assert(fyt->type == FYTT_PE_SEQ_INDEX);
+		fynn = fy_node_sequence_get_by_index(fyn, fyt->seq_index.index);
+		break;
+
+	case fpet_map_key:
+		final = true;
+		assert(fyt);
+		assert(fyt->type == FYTT_PE_MAP_KEY);
+		if (!fyt->map_key.fyd) {
+			/* simple key */
+			text = fy_token_get_text(fyt, &len);
+			fynn = fy_node_mapping_lookup_value_by_simple_key(fyn, text, len);
+		} else
+			fynn = fy_node_mapping_lookup_value_by_key(fyn, fyt->map_key.fyd->root);
+		break;
+
+	case fpet_chain:
+
+		/* start with tresults containing the current node */
+		fy_walk_result_list_init(&tresults);
+		fy_walk_result_add(&tresults, fyn);
+
+		/* iterate over each chain item */
+		for (exprn = fy_path_expr_list_head(&expr->children); exprn;
+			exprn = fy_path_expr_next(&expr->children, exprn)) {
+
+			/* nresults is the temp list collecting the results of each step */
+			fy_walk_result_list_init(&nresults);
+
+			/* for every node in the tresults execute */
+			while ((fwrn = fy_walk_result_list_pop(&tresults)) != NULL) {
+				fynn = fwrn->fyn;
+				fy_walk_result_free(fwrn);
+
+				fy_path_expr_execute(diag, exprn, &nresults, fynn);
+			}
+
+			/* move everything from nresults to tresults */
+			while ((fwrn = fy_walk_result_list_pop(&nresults)) != NULL) {
+				fynn = fwrn->fyn;
+				fy_walk_result_free(fwrn);
+				fy_walk_result_add(&tresults, fynn);
+			}
+		}
+
+		/* move everything in tresuls to results */
+		while ((fwrn = fy_walk_result_list_pop(&tresults)) != NULL) {
+			fynn = fwrn->fyn;
+			fy_walk_result_free(fwrn);
+			fy_walk_result_add(results, fynn);
+		}
+
+		return 0;
+
+	case fpet_multi:
+
+		/* iterate over each chain item */
+		for (exprn = fy_path_expr_list_head(&expr->children); exprn;
+			exprn = fy_path_expr_next(&expr->children, exprn)) {
+
+			/* nresults is the temp list collecting the results of each step */
+			fy_walk_result_list_init(&nresults);
+
+			fy_path_expr_execute(diag, exprn, &nresults, fyn);
+
+			/* move everything from nresults to results */
+			while ((fwrn = fy_walk_result_list_pop(&nresults)) != NULL) {
+				fynn = fwrn->fyn;
+				fy_walk_result_free(fwrn);
+				fy_walk_result_add(results, fynn);
+			}
+		}
+
+		return 0;
+
+	case fpet_every_child:
+
+		/* every scalar/alias is a single result */
+		if (fy_node_is_scalar(fyn) || fy_node_is_alias(fyn)) {
+
+			fy_walk_result_add(results, fyn);
+
+		} else if (fy_node_is_sequence(fyn)) {
+
+			for (fyni = fy_node_list_head(&fyn->sequence); fyni;
+				fyni = fy_node_next(&fyn->sequence, fyni)) {
+				fy_walk_result_add(results, fyni);
+			}
+
+		} else if (fy_node_is_mapping(fyn)) {
+
+			for (fynp = fy_node_pair_list_head(&fyn->mapping); fynp;
+					fynp = fy_node_pair_next(&fyn->mapping, fynp)) {
+				fy_walk_result_add(results, fynp->value);
+			}
+		} else
+			assert(0);
+
+		return 0;
+
+	case fpet_every_child_r:
+		return fy_walk_result_add_recursive(results, fyn, false);
+
+	case fpet_assert_scalar:
+		final = true;
+		if (fy_node_is_scalar(fyn))
+			fynn = fyn;
+		break;
+
+	case fpet_assert_collection:
+		final = true;
+		if (fy_node_is_mapping(fyn) || fy_node_is_sequence(fyn))
+			fynn = fyn;
+		break;
+
+	case fpet_assert_sequence:
+		final = true;
+		if (fy_node_is_sequence(fyn))
+			fynn = fyn;
+		break;
+
+	case fpet_assert_mapping:
+		final = true;
+		if (fy_node_is_mapping(fyn))
+			fynn = fyn;
+		break;
+
+	case fpet_seq_slice:
+
+		/* only on sequence */
+		if (!fy_node_is_sequence(fyn))
+			return 0;
+
+		start = fyt->seq_slice.start_index;
+		end = fyt->seq_slice.end_index;
+		count = fy_node_sequence_item_count(fyn);
+
+		if (count < end)
+			end = count;
+
+		/* don't handle negative slices yet */
+		if (start < 0 || end < 1)
+			return 0;
+
+		for (i = start; i < end; i++) {
+			fynn = fy_node_sequence_get_by_index(fyn, i);
+			fy_walk_result_add(results, fynn);
+		}
+
+		return 0;
+
+
+	default:
+		final = false;
+		break;
+	}
+
+	if (final) {
+		if (fynn)
+			fy_walk_result_add(results, fynn);
+		return 0;
+	}
+
+	return 0;
+}
