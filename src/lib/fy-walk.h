@@ -184,44 +184,25 @@ struct fy_path_expr {
 };
 FY_TYPE_DECL_LIST(path_expr);
 
-enum fy_path_parser_state {
-	/* none */
-	FYPPS_NONE,
-	/* expecting stream start */
-	FYPPS_STREAM_START,
-	/* expect expression start */
-	FYPPS_EXPRESSION_START,
-	/* expect component start */
-	FYPPS_COMPONENT_START,
-	/* expect separator / */
-	FYPPS_SEPARATOR,
-	/* expect separator / or filter */
-	FYPPS_SEPARATOR_OR_FILTER,
-	/* expect component start (but without a prefix, i.e. sibling prefix) */
-	FYPPS_COMPONENT_START_NO_PREFIX,
-	/* expect nothing */
-	FYPPS_END
-};
-
-FY_TYPE_FWD_DECL_LIST(path_parser_state_log);
-struct fy_path_parser_state_log {
-	struct list_head node;
-	enum fy_path_parser_state state;
-};
-FY_TYPE_DECL_LIST(path_parser_state_log);
+const struct fy_mark *fy_path_expr_start_mark(struct fy_path_expr *expr);
+const struct fy_mark *fy_path_expr_end_mark(struct fy_path_expr *expr);
 
 struct fy_path_parser {
 	struct fy_diag *diag;
 	struct fy_reader reader;
-	struct fy_path_expr *root;
 	struct fy_token_list queued_tokens;
 	bool stream_start_produced;
 	bool stream_end_produced;
 	bool stream_error;
 	int token_activity_counter;
 
-	enum fy_path_parser_state state;
-	struct fy_path_parser_state_log_list state_stack;
+	/* operator stack */
+	int operator_top;
+	struct fy_token *operators[100];
+
+	/* operand stack */
+	int operand_top;
+	struct fy_path_expr *operands[100];
 };
 
 void fy_path_parser_setup(struct fy_path_parser *fypp, struct fy_diag *diag);
