@@ -74,7 +74,7 @@ struct fy_atom {
 	bool starts_with_lb : 1;	/* atom starts with linebreak */
 	bool ends_with_ws : 1;		/* atom ends with whitespace */
 	bool ends_with_lb : 1;		/* atom ends with linebreak */
-	bool trailing_lb : 1;		/* atom ends with trailing linebreaks > 1 */ 
+	bool trailing_lb : 1;		/* atom ends with trailing linebreaks > 1 */
 	bool size0 : 1;			/* atom contains absolutely nothing */
 	bool valid_anchor : 1;		/* atom is a valid anchor */
 	bool json_mode : 1;		/* atom was read in json mode */
@@ -97,7 +97,7 @@ void fy_reader_fill_atom_end(struct fy_reader *fyr, struct fy_atom *handle);
 struct fy_atom *fy_reader_fill_atom(struct fy_reader *fyr, int advance, struct fy_atom *handle);
 
 struct fy_atom *fy_reader_fill_atom_mark(struct fy_reader *fyr, const struct fy_mark *start_mark,
-				  	 const struct fy_mark *end_mark, struct fy_atom *handle);
+					 const struct fy_mark *end_mark, struct fy_atom *handle);
 struct fy_atom *fy_reader_fill_atom_at(struct fy_reader *fyr, int advance, int count, struct fy_atom *handle);
 
 #define fy_reader_fill_atom_a(_fyr, _advance)  fy_reader_fill_atom((_fyr), (_advance), alloca(sizeof(struct fy_atom)))

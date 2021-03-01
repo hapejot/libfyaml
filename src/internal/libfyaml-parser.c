@@ -1367,37 +1367,6 @@ static void test_diag_output(struct fy_diag *diag, void *user, const char *buf, 
 }
 #endif
 
-extern const char *walk_component_type_txt[];
-
-static void
-do_walk_test(const struct fy_parse_cfg *cfg, int argc, char *argv[])
-{
-	struct fy_diag_cfg dcfg;
-	struct fy_walk_ctx *wc = NULL;
-	struct fy_diag *diag;
-	const char *path;
-
-	fy_diag_cfg_default(&dcfg);
-	diag = fy_diag_create(&dcfg);
-	assert(diag);
-
-	if (argc < 1)
-		path = "/test";
-	else
-		path = argv[0];
-
-	printf("creating walk for \"%s\"\n", path);
-
-	wc = fy_walk_create(path, (size_t)-1, diag);
-	assert(wc);
-
-	printf("walk created OK\n");
-
-	fy_walk_destroy(wc);
-
-	fy_diag_destroy(diag);
-}
-
 int do_build(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 {
 #if 0
@@ -2592,102 +2561,7 @@ int do_build(const struct fy_parse_cfg *cfg, int argc, char *argv[])
 	do_accel_test(cfg, argc, argv);
 #endif
 
-	do_walk_test(cfg, argc, argv);
-
 	return 0;
-}
-
-static void walk_component_list_dump(struct fy_diag *diag, struct fy_walk_component_list *list, int level)
-{
-	struct fy_walk_component *fwc;
-	int ind;
-
-	for (fwc = fy_walk_component_list_head(list); fwc; fwc = fy_walk_component_next(list, fwc)) {
-		ind = (level + 1) * 2;
-		fy_notice(diag, "%-*s%-*s %.*s\n",
-				ind, "",
-				32 - ind, walk_component_type_txt[fwc->type],
-				(int)fwc->complen, fwc->comp);
-
-		if (!fy_walk_component_list_empty(&fwc->children))
-			walk_component_list_dump(diag, &fwc->children, level + 1);
-	}
-}
-
-static void walk_dump(struct fy_diag *diag, struct fy_walk_ctx *wc)
-{
-	fy_notice(diag, "walk context components:\n");
-	walk_component_list_dump(diag, &wc->components, 0);
-
-}
-
-int do_walk(struct fy_parser *fyp, const char *walkpath, const char *walkstart, int indent, int width, bool resolve, bool sort)
-{
-	struct fy_walk_ctx *wc;
-	struct fy_walk_result_list results;
-	struct fy_walk_result *fwr;
-	struct fy_document *fyd;
-	struct fy_node *fyn;
-	unsigned int flags;
-	int rc, count;
-	char *path;
-
-	flags = 0;
-	if (sort)
-		flags |= FYECF_SORT_KEYS;
-	flags |= FYECF_INDENT(indent) | FYECF_WIDTH(width);
-
-	fy_notice(fyp->diag, "creating walk for \"%s\"\n", walkpath);
-
-	wc = fy_walk_create(walkpath, (size_t)-1, fyp->diag);
-	if (!wc) {
-		fy_error(fyp->diag, "failed to create walk for \"%s\"\n", walkpath);
-		return -1;
-	}
-
-	walk_dump(fyp->diag, wc);
-
-	count = 0;
-	while ((fyd = fy_parse_load_document(fyp)) != NULL) {
-
-		if (resolve) {
-			rc = fy_document_resolve(fyd);
-			if (rc)
-				return -1;
-		}
-
-		fyn = fy_node_by_path(fy_document_root(fyd), walkstart, FY_NT, FYNWF_DONT_FOLLOW);
-		if (!fyn) {
-			printf("could not find walkstart node %s\n", walkstart);
-			continue;
-		}
-
-		fy_walk_result_list_init(&results);
-
-		fy_walk_perform(wc, &results, fyn);
-
-		fy_emit_document_to_file(fyd, flags, NULL);
-
-		printf("\n");
-		while ((fwr = fy_walk_result_list_pop(&results)) != NULL) {
-
-			path = fy_node_get_path(fwr->fyn);
-			assert(path);
-
-			printf("> %s\n", path);
-			free(path);
-
-			fy_walk_result_free(fwr);
-		}
-
-		fy_parse_document_destroy(fyp, fyd);
-
-		count++;
-	}
-
-	fy_walk_destroy(wc);
-
-	return count > 0 ? 0 : -1;
 }
 
 struct test_parser {
@@ -2777,7 +2651,7 @@ int do_reader(struct fy_parser *fyp, int indent, int width, bool resolve, bool s
 	return 0;
 }
 
-int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart, int indent, int width, bool resolve, bool sort)
+int do_walk(struct fy_parser *fyp, const char *walkpath, const char *walkstart, int indent, int width, bool resolve, bool sort)
 {
 	struct fy_path_parser fypp_data, *fypp = &fypp_data;
 	struct fy_path_expr *expr;
@@ -2801,7 +2675,7 @@ int do_walk2(struct fy_parser *fyp, const char *walkpath, const char *walkstart,
 
 	fyi = fy_input_from_data(walkpath, FY_NT, NULL, false);
 	assert(fyi);
-	
+
 	rc = fy_path_parser_open(fypp, fyi, NULL);
 	assert(!rc);
 
@@ -3150,8 +3024,7 @@ int main(int argc, char *argv[])
 	    strcmp(mode, "dump") &&
 	    strcmp(mode, "build") &&
 	    strcmp(mode, "walk") &&
-	    strcmp(mode, "reader") &&
-	    strcmp(mode, "walk2")
+	    strcmp(mode, "reader")
 #if defined(HAVE_LIBYAML) && HAVE_LIBYAML
 	    && strcmp(mode, "libyaml-scan")
 	    && strcmp(mode, "libyaml-parse")
@@ -3327,12 +3200,6 @@ int main(int argc, char *argv[])
 		rc = do_reader(fyp, indent, width, resolve, sort);
 		if (rc < 0) {
 			/* fprintf(stderr, "do_reader() error %d\n", rc); */
-			goto cleanup;
-		}
-	} else if (!strcmp(mode, "walk2")) {
-		rc = do_walk2(fyp, walkpath, walkstart, indent, width, resolve, sort);
-		if (rc < 0) {
-			/* fprintf(stderr, "do_walk2() error %d\n", rc); */
 			goto cleanup;
 		}
 	}

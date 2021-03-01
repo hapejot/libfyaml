@@ -38,111 +38,8 @@ struct fy_walk_result {
 FY_TYPE_FWD_DECL_LIST(walk_result);
 FY_TYPE_DECL_LIST(walk_result);
 
-enum fy_walk_component_type {
-	/* none is analyzed and the others are found */
-	fwct_none,
-	/* start */
-	fwct_start_root,
-	fwct_start_alias,
-	/* ypath */
-	fwct_root,		/* /^ or / at the beginning of the expr */
-	fwct_this,		/* /. */
-	fwct_parent,		/* /.. */
-	fwct_every_child,	// /* every immediate child
-	fwct_every_child_r,	// /** every recursive child
-	fwct_every_leaf,	// /**$ every leaf node
-	fwct_assert_collection,	/* match only collection (at the end only) */
-	fwct_assert_scalar,	/* match only scalars (leaves) */
-	fwct_assert_sequence,	/* match only sequences */
-	fwct_assert_mapping,	/* match only sequences */
-	fwct_simple_map_key,
-	fwct_seq_index,
-	fwct_map_key,		/* complex map key (quoted, flow seq or map) */
-	fwct_seq_slice,
-
-	fwct_multi,
-	fwct_chain,
-};
-
-static inline bool fy_walk_component_type_is_valid(enum fy_walk_component_type type)
-{
-	return type >= fwct_start_root && type <= fwct_chain;
-}
-
-static inline bool
-fy_walk_component_type_is_initial(enum fy_walk_component_type type)
-{
-	return type == fwct_start_root ||
-	       type == fwct_start_alias;
-}
-
-static inline bool
-fy_walk_component_type_is_terminating(enum fy_walk_component_type type)
-{
-	return type == fwct_every_child_r ||
-	       type == fwct_every_leaf ||
-	       type == fwct_assert_collection ||
-	       type == fwct_assert_scalar ||
-	       type == fwct_assert_sequence ||
-	       type == fwct_assert_mapping;
-}
-
-static inline bool
-fy_walk_component_type_is_multi(enum fy_walk_component_type type)
-{
-	return type == fwct_every_child ||
-	       type == fwct_every_child_r ||
-	       type == fwct_every_leaf ||
-	       type == fwct_seq_slice ||
-	       type == fwct_multi ||
-	       type == fwct_chain;
-}
-
-FY_TYPE_FWD_DECL_LIST(walk_component);
-struct fy_walk_component {
-	struct list_head node;
-	struct fy_walk_ctx *wc;
-	struct fy_walk_component *parent;
-	struct fy_walk_component_list children;
-	const char *comp;
-	size_t complen;
-	enum fy_walk_component_type type;
-	bool multi;
-	union {
-		struct {
-			int index;
-		} seq_index;
-		struct {
-			struct fy_document *fyd;	/* for complex key */
-		} map_key;
-		struct {
-			const char *alias;
-			size_t aliaslen;
-		} alias;
-		struct {
-			int start_index;
-			int end_index;
-		} seq_slice;
-	};
-};
-FY_TYPE_DECL_LIST(walk_component);
-
-struct fy_walk_ctx {
-	char *path;	/* work area */
-	size_t pathlen;
-	struct fy_walk_component_list components;
-};
-
-struct fy_walk_ctx *fy_walk_create(const char *path, size_t len, struct fy_diag *diag);
-
-void fy_walk_destroy(struct fy_walk_ctx *wc);
-
-int fy_walk_perform(struct fy_walk_ctx *wc, struct fy_walk_result_list *results, struct fy_node *fyn);
-
 void fy_walk_result_free(struct fy_walk_result *fwr);
 void fy_walk_result_list_free(struct fy_walk_result_list *results);
-
-/*********************/
 
 enum fy_path_expr_type {
 	fpet_none,
@@ -152,12 +49,10 @@ enum fy_path_expr_type {
 	fpet_parent,		/* /.. */
 	fpet_every_child,	// /* every immediate child
 	fpet_every_child_r,	// /** every recursive child
-	fpet_every_leaf,	// /**$ every leaf node
-	fpet_assert_collection,	/* match only collection (at the end only) */
-	fpet_assert_scalar,	/* match only scalars (leaves) */
-	fpet_assert_sequence,	/* match only sequences */
-	fpet_assert_mapping,	/* match only sequences */
-	fpet_simple_map_key,
+	fpet_filter_collection,	/* match only collection (at the end only) */
+	fpet_filter_scalar,	/* match only scalars (leaves) */
+	fpet_filter_sequence,	/* match only sequences */
+	fpet_filter_mapping,	/* match only mappings */
 	fpet_seq_index,
 	fpet_map_key,		/* complex map key (quoted, flow seq or map) */
 	fpet_seq_slice,
@@ -172,6 +67,20 @@ extern const char *path_expr_type_txt[];
 static inline bool fy_path_expr_type_is_valid(enum fy_path_expr_type type)
 {
 	return type >= fpet_root && type <= fpet_chain;
+}
+
+static inline bool fy_path_expr_type_is_single_result(enum fy_path_expr_type type)
+{
+	return type == fpet_root ||
+	       type == fpet_this ||
+	       type == fpet_parent ||
+	       type == fpet_map_key ||
+	       type == fpet_seq_index ||
+	       type == fpet_alias ||
+	       type == fpet_filter_collection ||
+	       type == fpet_filter_scalar ||
+	       type == fpet_filter_sequence ||
+	       type == fpet_filter_mapping;
 }
 
 FY_TYPE_FWD_DECL_LIST(path_expr);
@@ -191,6 +100,7 @@ struct fy_path_parser {
 	struct fy_diag *diag;
 	struct fy_reader reader;
 	struct fy_token_list queued_tokens;
+	enum fy_token_type last_queued_token_type;
 	bool stream_start_produced;
 	bool stream_end_produced;
 	bool stream_error;
@@ -218,7 +128,7 @@ void fy_path_expr_free(struct fy_path_expr *expr);
 
 void fy_path_parser_setup(struct fy_path_parser *fypp, struct fy_diag *diag);
 void fy_path_parser_cleanup(struct fy_path_parser *fypp);
-int fy_path_parser_open(struct fy_path_parser *fypp, 
+int fy_path_parser_open(struct fy_path_parser *fypp,
 			struct fy_input *fyi, const struct fy_reader_input_cfg *icfg);
 void fy_path_parser_close(struct fy_path_parser *fypp);
 
