@@ -50,7 +50,6 @@ struct fy_input_cfg {
 		struct {
 			const char *name;
 			FILE *fp;
-            bool ignore_stdio;
 			size_t chunk;
 			bool ignore_stdio;
 		} stream;
