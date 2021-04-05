@@ -52,6 +52,7 @@ struct fy_input_cfg {
 			FILE *fp;
             bool ignore_stdio;
 			size_t chunk;
+			bool ignore_stdio;
 		} stream;
 		struct {
 			const void *data;
